@@ -27,7 +27,7 @@ spec:
           
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: {{ .Values.backend.containerPort | default 8000 }}
               protocol: TCP
           env:
             - name: ORTHANC_URL
@@ -35,6 +35,8 @@ spec:
               value: "http://{{ include "gen-erics.fullname" . }}-orthanc:{{ .Values.orthanc.service.httpPort | default 8042 }}"
             - name: DEBUG
               value: "{{ .Values.backend.debug | default "False" }}"
+            - name: LISTEN_ADDRESS
+              value: ":{{ .Values.backend.containerPort }}"
           # Add readiness/liveness probes
           livenessProbe:
             httpGet:

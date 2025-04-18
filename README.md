@@ -66,7 +66,7 @@ gen-erics/
 └── README.md                    # Project overview, setup instructions
 
 
-# update go modules
+## update go modules
 
 Navigate to the backend dir. Run:
 
@@ -74,9 +74,7 @@ Navigate to the backend dir. Run:
 go mod tidy
 ```
 
-# GitHub Container Registry
-
-
+## GitHub Container Registry
 
 ```bash
 # get ready to push images
@@ -84,7 +82,38 @@ export CR_PAT=<github token classic>
 echo $CR_PAT | docker login ghcr.io -u <user>> --password-stdin
 
 # create an image tag
-export IMAGE_NAME="ewag/gen-erics:k3d-test-0.1"
-docker build -t $IMAGE_NAME .
+
+docker build -t ghcr.io/ewag/gen-erics:k3d-test-0.1
+docker push ghcr.io/ewag/gen-erics:k3d-test-0.1
+```
+
+## K8s pull secret
+
+```bash
+# Replace placeholders below!
+export K8S_NAMESPACE="pacs-dev" # Or your target namespace
+export GITHUB_USERNAME="YOUR_GITHUB_USERNAME" # Your GitHub username
+export GITHUB_PAT="YOUR_GENERATED_PAT" # The PAT you just created
+export SECRET_NAME="ghcr-pull-secret" # Name for your k8s secret
+
+kubectl create secret docker-registry $SECRET_NAME \
+  --namespace $K8S_NAMESPACE \
+  --docker-server=ghcr.io \
+  --docker-username=$GITHUB_USERNAME \
+  --docker-password=$GITHUB_PAT \
+  --docker-email=your.email@example.com # Email is usually required but can be anything valid
+```
+
+## Add some demo dicom images for testing
+
+I grabbed these [7 test cases](https://www.visus.com/en/downloads/jivex-dicom-viewer.html) and put them in the test_dicom folder.
+
+## testing the locations with the mocks
+
+```bash
+curl http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/location
+curl http://localhost:8080/api/v1/studies/STUDY_UID_2_COLD/location
+curl -X POST -H "Content-Type: application/json" -d '{"targetTier": "warm"}' http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/move
+curl http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/location
 
 ```
