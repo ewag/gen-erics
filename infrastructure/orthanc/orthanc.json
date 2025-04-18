@@ -1,0 +1,22 @@
+// infrastructure/orthanc/orthanc.json
+{
+    "Name" : "Orthanc K8s Test",
+    "StorageDirectory" : "/var/lib/orthanc/db",
+    "IndexDirectory" : "/var/lib/orthanc/db",
+    "StorageCompression" : true,
+    "MaximumStorageSize" : 10240, // Limit size for testing (in MB)
+    "MaximumPatientCount" : 1000,
+    "LuaScripts" : [
+    ],
+    "Plugins" : [
+      "/usr/share/orthanc/plugins/" // Path depends on the base image
+    ],
+    "RemoteAccessAllowed" : true,
+    "AuthenticationEnabled" : false, // Keep it simple for now, ADD AUTH LATER!
+    "DicomAet" : "ORTHANC",
+    "DicomPort" : 4242,
+    "HttpPort" : 8042,
+    "HttpVerbose": true, // Useful for debugging
+    "HttpExplainErrors": true
+    // Add other necessary configurations later (e.g., PostgreSQL, cloud storage)
+  }

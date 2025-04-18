@@ -1,0 +1,3 @@
+infrastructure/helm/gen-erics/backend-service.yaml
+secrets
+secrets/

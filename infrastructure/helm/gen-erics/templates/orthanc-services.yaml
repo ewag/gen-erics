@@ -1,0 +1,45 @@
+# infrastructure/helm/gen-erics/templates/orthanc-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gen-erics.fullname" . }}-orthanc
+  labels:
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orthanc
+spec:
+  type: {{ .Values.orthanc.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ .Values.orthanc.service.httpPort | default 8042 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.orthanc.service.dicomPort | default 4242 }}
+      targetPort: dicom
+      protocol: TCP
+      name: dicom
+  selector:
+    {{- include "gen-erics.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: orthanc
+---
+# Headless service for StatefulSet DNS discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gen-erics.fullname" . }}-orthanc-headless
+  labels:
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orthanc
+spec:
+  ports:
+    - port: {{ .Values.orthanc.service.httpPort | default 8042 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.orthanc.service.dicomPort | default 4242 }}
+      targetPort: dicom
+      protocol: TCP
+      name: dicom
+  clusterIP: None # Important for headless service
+  selector:
+    {{- include "gen-erics.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: orthanc

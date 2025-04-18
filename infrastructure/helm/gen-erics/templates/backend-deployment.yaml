@@ -1,0 +1,55 @@
+# infrastructure/helm/gen-erics/templates/backend-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gen-erics.fullname" . }}-backend
+  labels:
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "gen-erics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "gen-erics.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      imagePullSecrets:
+      - name: {{ .Values.backend.imagePullSecretsName | default "ghcr-pull-secret" }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy | default "IfNotPresent" }}
+          
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: ORTHANC_URL
+              # This uses the Kubernetes service name for Orthanc
+              value: "http://{{ include "gen-erics.fullname" . }}-orthanc:{{ .Values.orthanc.service.httpPort | default 8042 }}"
+            - name: DEBUG
+              value: "{{ .Values.backend.debug | default "False" }}"
+          # Add readiness/liveness probes
+          livenessProbe:
+            httpGet:
+              path: /healthz # Path defined in our Go app's routes
+              port: {{ .Values.backend.containerPort }} # Port the Go app listens on
+            initialDelaySeconds: {{ .Values.backend.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /healthz # Path defined in our Go app's routes
+              port: {{ .Values.backend.containerPort }} # Port the Go app listens on
+            initialDelaySeconds: {{ .Values.backend.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.readiness.failureThreshold }}
+          resources: {} # Define resource requests/limits

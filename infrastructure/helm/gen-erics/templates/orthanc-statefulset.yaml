@@ -1,0 +1,52 @@
+# infrastructure/helm/gen-erics/templates/orthanc-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet # Use StatefulSet if you need stable network IDs and persistent storage
+metadata:
+  name: {{ include "gen-erics.fullname" . }}-orthanc
+  labels:
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orthanc
+spec:
+  serviceName: {{ include "gen-erics.fullname" . }}-orthanc-headless # Define a headless service too
+  replicas: 1 # Start with one replica
+  selector:
+    matchLabels:
+      {{- include "gen-erics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: orthanc
+  template:
+    metadata:
+      labels:
+        {{- include "gen-erics.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: orthanc
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: orthanc
+        image: {{ .Values.orthanc.image | default "orthancteam/orthanc" }}:{{ .Values.orthanc.tag | default "22.6.1" }}
+        imagePullPolicy: {{ .Values.orthanc.pullPolicy | default "IfNotPresent" }}
+        ports:
+        - name: http
+          containerPort: 8042
+          protocol: TCP
+        - name: dicom
+          containerPort: 4242
+          protocol: TCP
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/orthanc/
+        - name: storage-volume # Add persistent volume claim later if needed
+          mountPath: /var/lib/orthanc/db
+      volumes:
+      - name: config-volume
+        configMap:
+          name: {{ include "gen-erics.fullname" . }}-orthanc-config
+      - name: storage-volume # Define PersistentVolumeClaim or use emptyDir for testing
+        emptyDir: {} # WARNING: Data will be lost if pod restarts! Use PVC for persistence.
+  # volumeClaimTemplates: # Define for persistent storage
+  # - metadata:
+  #     name: storage-volume
+  #   spec:
+  #     accessModes: [ "ReadWriteOnce" ]
+  #     resources:
+  #       requests:
+  #         storage: {{ .Values.orthanc.storage.size | default "10Gi" }}
