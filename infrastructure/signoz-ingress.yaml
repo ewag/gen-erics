@@ -1,0 +1,23 @@
+# File: signoz-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: signoz-ingress         # Name for the Ingress object
+  namespace: observability      # Namespace where SigNoz service lives
+  annotations:
+    # Specify the Ingress controller class (Traefik is default in k3d)
+    kubernetes.io/ingressClassName: "traefik"
+    # Add other Traefik specific annotations if needed later
+spec:
+  rules:
+  - host: signoz.local # Hostname you will use in the browser
+    http:
+      paths:
+      - path: /             # Match all paths for this host
+        pathType: Prefix
+        backend:
+          service:
+            # --- !!! VERIFY THIS SERVICE NAME AND PORT !!! ---
+            name: signoz # The name of the SigNoz UI service
+            port:
+              number: 8080         # The port number exposed by that service

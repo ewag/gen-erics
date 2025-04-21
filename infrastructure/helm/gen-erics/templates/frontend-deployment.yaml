@@ -1,0 +1,50 @@
+# File: infrastructure/helm/gen-erics/templates/frontend-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Creates deployment name like: <release-name>-<chart-name>-frontend
+  name: {{ include "gen-erics.fullname" . }}-frontend
+  labels:
+    # Includes standard labels defined in _helpers.tpl
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    # Adds a specific component label
+    app.kubernetes.io/component: frontend
+spec:
+  # Number of pods to run, from values.yaml
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      # Selects pods based on standard labels + component label
+      {{- include "gen-erics.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        # Labels applied to the Pods
+        {{- include "gen-erics.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      # If your frontend image is in a private registry, uncomment and configure this
+      # Make sure the corresponding secret exists in the namespace
+      imagePullSecrets:
+      - name: {{ .Values.backend.imagePullSecretsName | default "ghcr-pull-secret" }}
+      containers:
+        - name: frontend # Container name
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80 # Default port Nginx listens on
+              protocol: TCP
+          # Add liveness/readiness probes later if needed for nginx
+          # livenessProbe:
+          #   httpGet:
+          #     path: /index.html # Or just /
+          #     port: http
+          # readinessProbe:
+          #   httpGet:
+          #     path: /index.html # Or just /
+          #     port: http
+          resources:
+            # Allows setting resource requests/limits via values.yaml
+            {{- toYaml .Values.frontend.resources | nindent 12 }}

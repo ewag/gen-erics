@@ -19,13 +19,20 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new Orthanc API client
+// NewClient creates a new Orthanc API client with a default HTTP client
 func NewClient(baseURL string, timeout time.Duration) *Client {
+	return NewClientWithHttpClient(baseURL, &http.Client{Timeout: timeout})
+}
+
+// NewClientWithHttpClient creates a new Orthanc API client with a specific *http.Client
+// This allows passing an instrumented client.
+func NewClientWithHttpClient(baseURL string, client *http.Client) *Client {
+	if client == nil { // Basic default if nil is passed
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
 	return &Client{
-		BaseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: timeout, // Set a reasonable timeout
-		},
+		BaseURL:    baseURL,
+		httpClient: client,
 	}
 }
 
