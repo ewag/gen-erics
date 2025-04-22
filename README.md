@@ -181,7 +181,7 @@ helm install signoz signoz/signoz \
   --namespace observability \
   --create-namespace \
   --set frontend.ingress.enabled=true \
-  --set 'frontend.ingress.hosts[0].host=signoz.local' \ # <-- Add single quotes here
+  --set 'frontend.ingress.hosts[0].host=signoz.local' \
   --set frontend.ingress.ingressClassName=traefik \
   --set global.storageClass=local-path \
   --wait

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 	"io"
+	"context"
+	"log/slog"
 	// "errors"
 )
 
@@ -135,7 +137,8 @@ func (c *Client) GetInstanceSimplifiedTags(instanceUID string) (map[string]strin
 	return tags, nil
 }
 
-// GetInstanceFile retrieves the raw DICOM file content for a specific instance.
+// GetInstanceFile retrieves the raw DICOM file content for a specific instance. 
+// look to use io.ReadCloser for streaming later
 func (c *Client) GetInstanceFile(instanceUID string) ([]byte, error) {
 	// Orthanc uses /instances/{id}/file endpoint
 	targetURL := fmt.Sprintf("%s/instances/%s/file", c.BaseURL, instanceUID)
@@ -170,3 +173,88 @@ func (c *Client) GetInstanceFile(instanceUID string) ([]byte, error) {
 }
 // --- Add more methods later for other Orthanc interactions ---
 // e.g., GetStudyDetails, GetSeries, GetInstance, GetWADO, PostInstance etc.
+func (c *Client) GetStudyDetails(ctx context.Context, orthancStudyID string) (*StudyDetails, error) { // Make sure StudyDetails struct is defined (e.g., in types.go)
+	if orthancStudyID == "" {
+		return nil, fmt.Errorf("orthancStudyID cannot be empty")
+	}
+	// Endpoint for detailed study info
+	targetURL := fmt.Sprintf("%s/studies/%s", c.BaseURL, orthancStudyID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil) // Use context
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request to get study details: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		slog.ErrorContext(ctx, "Orthanc client failed to execute request for study details", "url", targetURL, "error", err)
+		return nil, fmt.Errorf("failed to execute request to get study details: %w", err)
+	}
+	defer resp.Body.Close()
+
+	logAttrs := []any{"url", targetURL, "statusCode", resp.StatusCode} // Attributes for logging
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		logAttrs = append(logAttrs, "responseBody", string(bodyBytes))
+		slog.ErrorContext(ctx, "Orthanc returned non-OK status getting study details", logAttrs...)
+        // Return specific error for not found
+        if resp.StatusCode == http.StatusNotFound {
+            return nil, fmt.Errorf("study %s not found (404)", orthancStudyID)
+        }
+		return nil, fmt.Errorf("orthanc returned non-OK status %d getting study details", resp.StatusCode)
+	}
+
+	var details StudyDetails // Assumes StudyDetails struct is defined in this package
+	if err := json.NewDecoder(resp.Body).Decode(&details); err != nil {
+		slog.ErrorContext(ctx, "Failed to decode study details response from Orthanc", "url", targetURL, "error", err)
+		return nil, fmt.Errorf("failed to decode study details response: %w", err)
+	}
+
+	slog.DebugContext(ctx, "Successfully retrieved study details from Orthanc", logAttrs...)
+	return &details, nil
+}
+
+// GetStudyInstances retrieves details for all instances within a specific study ID from Orthanc.
+func (c *Client) GetStudyInstances(ctx context.Context, orthancStudyID string) ([]InstanceDetails, error) { // Make sure InstanceDetails struct is defined
+	if orthancStudyID == "" {
+		return nil, fmt.Errorf("orthancStudyID cannot be empty")
+	}
+	// Endpoint for instances within a study
+	targetURL := fmt.Sprintf("%s/studies/%s/instances", c.BaseURL, orthancStudyID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil) // Use context
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request to get study instances: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		slog.ErrorContext(ctx, "Orthanc client failed to execute request for study instances", "url", targetURL, "error", err)
+		return nil, fmt.Errorf("failed to execute request to get study instances: %w", err)
+	}
+	defer resp.Body.Close()
+
+    logAttrs := []any{"url", targetURL, "statusCode", resp.StatusCode}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+        logAttrs = append(logAttrs, "responseBody", string(bodyBytes))
+		slog.ErrorContext(ctx, "Orthanc returned non-OK status getting study instances", logAttrs...)
+         // Return specific error for not found
+        if resp.StatusCode == http.StatusNotFound {
+             return nil, fmt.Errorf("study %s not found (404) when getting instances", orthancStudyID)
+        }
+		return nil, fmt.Errorf("orthanc returned non-OK status %d getting study instances", resp.StatusCode)
+	}
+
+	var instances []InstanceDetails // Expecting a JSON array, assumes InstanceDetails struct is defined
+	if err := json.NewDecoder(resp.Body).Decode(&instances); err != nil {
+        slog.ErrorContext(ctx, "Failed to decode study instances response from Orthanc", "url", targetURL, "error", err)
+		return nil, fmt.Errorf("failed to decode study instances response: %w", err)
+	}
+
+    logAttrs = append(logAttrs, "instanceCount", len(instances))
+	slog.DebugContext(ctx, "Successfully retrieved study instances from Orthanc", logAttrs...)
+	return instances, nil
+}
