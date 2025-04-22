@@ -1,0 +1,23 @@
+# File: infrastructure/helm/gen-erics/templates/frontend-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  # Creates service name like: <release-name>-<chart-name>-frontend
+  name: {{ include "gen-erics.fullname" . }}-frontend
+  labels:
+    # Includes standard labels defined in _helpers.tpl
+    {{- include "gen-erics.labels" . | nindent 4 }}
+    # Adds a specific component label
+    app.kubernetes.io/component: frontend
+spec:
+  # Service type from values.yaml (e.g., ClusterIP, NodePort, LoadBalancer)
+  type: {{ .Values.frontend.service.type }}
+  ports:
+    - port: {{ .Values.frontend.service.port }} # Port the service listens on (e.g., 80)
+      targetPort: 80 # Port the container (nginx) listens on
+      protocol: TCP
+      name: http
+  selector:
+    # Selects the pods managed by the frontend deployment
+    {{- include "gen-erics.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend

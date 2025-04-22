@@ -3,13 +3,16 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
-	"strings"
+	// "strings"
 	// "sync" // No longer needed here if using setStudyStatus helper
 
 	"github.com/gin-gonic/gin"
 	// Ensure correct import path for your project structure
 	"github.com/ewag/gen-erics/backend/internal/orthanc"
+	models "github.com/ewag/gen-erics/backend/internal/models"
+	"github.com/ewag/gen-erics/backend/internal/storage"
 )
 
 // Constants used by handlers
@@ -20,16 +23,17 @@ const (
 // APIHandler holds dependencies for API handlers
 // DEFINED ONLY HERE
 type APIHandler struct {
-	orthancClient *orthanc.Client
+	orthancClient 	*orthanc.Client
+	db				storage.StatusStore
 	// Add other dependencies like DB later
 }
 
 // NewAPIHandler creates a new handler instance
 // DEFINED ONLY HERE
-func NewAPIHandler(orthancClient *orthanc.Client) *APIHandler {
-	InitializeMockStatus() // Call initialization from state.go
+func NewAPIHandler(orthancClient *orthanc.Client, db storage.StatusStore) *APIHandler {
 	return &APIHandler{
-		orthancClient: orthancClient,
+		orthancClient: 	orthancClient,
+		db:				db,
 	}
 }
 
@@ -45,180 +49,239 @@ type MoveRequest struct {
 func (h *APIHandler) HealthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
-
-// ListStudiesHandler - kept for reference, may need rework later
 func (h *APIHandler) ListStudiesHandler(c *gin.Context) {
-	studies, err := h.orthancClient.ListStudies()
+	ctx := c.Request.Context() // Use request context
+	slog.InfoContext(ctx, "Handling list studies request")
+
+	studyIDs, err := h.orthancClient.ListStudies() // Assumes this returns []string
 	if err != nil {
-		fmt.Printf("Error getting studies from Orthanc: %v\n", err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Failed to retrieve studies from Orthanc"})
+		slog.ErrorContext(ctx, "Failed to list study IDs from Orthanc", "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve study list from storage"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"studies": studies})
+
+	detailedStudies := make([]*orthanc.StudyDetails, 0, len(studyIDs)) // Pre-allocate slice
+	for _, studyID := range studyIDs {
+		// Fetch details for each study ID
+		details, err := h.orthancClient.GetStudyDetails(ctx, studyID) // Pass context
+		if err != nil {
+			// Log the error for this specific study but continue with others
+			slog.WarnContext(ctx, "Failed to get details for specific study", "orthancStudyID", studyID, "error", err)
+			continue // Skip this study if details fail
+		}
+		if details != nil {
+			detailedStudies = append(detailedStudies, details)
+		}
+	}
+
+	slog.InfoContext(ctx, "Successfully retrieved study list details", "count", len(detailedStudies))
+	c.JSON(http.StatusOK, detailedStudies) // Return the slice of detailed studies
 }
 
-// GetStudyLocationHandler retrieves the location status for a given study.
+// GetStudyLocationHandler retrieves status from the database
 func (h *APIHandler) GetStudyLocationHandler(c *gin.Context) {
-	studyUID := c.Param("studyUID")
-	if studyUID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID parameter"})
-		return
-	}
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    if studyUID == "" { /* ... handle error ... */ return }
 
-	status, found := getStudyStatus(studyUID) // Use helper from state.go
+    // Get status from DB via storage layer
+    status, found, err := h.db.GetStatus(ctx, studyUID)
+    logAttrs := []any{"studyUID", studyUID}
 
-	if !found {
-		fmt.Printf("Status not found for study %s, assuming default: %v\n", studyUID, status)
-		// status variable already holds the default from getStudyStatus
-		c.JSON(http.StatusOK, status)
-		return
-	}
+    if err != nil {
+        // Error already logged in storage layer
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve study status"})
+        return
+    }
 
-	fmt.Printf("Found status for study %s: %v\n", studyUID, status)
-	c.JSON(http.StatusOK, status)
+    if !found {
+        slog.InfoContext(ctx, "No status found for study in DB, returning default 'hot'", logAttrs...)
+        // Define default status if not found in DB
+        defaultStatus := &models.LocationStatus{
+             LocationType: "edge", // Or your appropriate default
+             EdgeID:       nil,    // Default edge ID is null
+             Tier:         "hot",  // Default tier
+        }
+        c.JSON(http.StatusOK, defaultStatus)
+        return
+    }
+
+    // Status found in DB
+    logAttrs = append(logAttrs, "status", status, "foundInDB", found)
+    slog.InfoContext(ctx, "Returning study status from DB", logAttrs...)
+    c.JSON(http.StatusOK, status)
 }
 
-// MoveStudyHandler handles requests to move a study.
+// MoveStudyHandler updates status in the database
 func (h *APIHandler) MoveStudyHandler(c *gin.Context) {
-	studyUID := c.Param("studyUID")
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    if studyUID == "" { /* ... handle error ... */ return }
+
+    var req MoveRequest
+    if err := c.ShouldBindJSON(&req); err != nil { /* ... handle error ... */ return }
+
+    logAttrs := []any{"studyUID", studyUID, "targetTier", req.TargetTier, "targetLocation", req.TargetLocation}
+    slog.InfoContext(ctx, "Received move study request", logAttrs...)
+
+    // Calculate new status struct (using models.LocationStatus)
+    newStatus := models.LocationStatus{Tier: req.TargetTier}
+    if req.TargetTier == "hot" && req.TargetLocation != "" {
+        newStatus.LocationType = "edge"
+        edgeId := req.TargetLocation // Create variable to take address
+        newStatus.EdgeID = &edgeId     // Assign address for pointer
+    } else if req.TargetTier != "hot" {
+        newStatus.LocationType = "cloud"
+        newStatus.EdgeID = nil // Explicitly set to nil for non-edge
+    } else {
+        slog.WarnContext(ctx, "Move to 'hot' tier requested without specific edge location", logAttrs...)
+        newStatus.LocationType = "unknown"
+        newStatus.EdgeID = nil
+    }
+
+    // Set status in DB via storage layer
+    err := h.db.SetStatus(ctx, studyUID, newStatus)
+    if err != nil {
+        // Error already logged in storage layer
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update study status"})
+        return
+    }
+
+    logAttrs = append(logAttrs, "newStatus", newStatus)
+    slog.InfoContext(ctx, "Updated status for study in DB", logAttrs...)
+
+    c.JSON(http.StatusAccepted, gin.H{
+        "message":      "Move request received and status updated.", // Updated message
+        "currentStatus": newStatus,
+    })
+}
+
+// GetInstancePreviewHandler needs modification to use DB status check
+func (h *APIHandler) GetInstancePreviewHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    instanceUID := c.Param("instanceUID")
+     if studyUID == "" || instanceUID == "" { /* ... handle error ... */ return }
+
+    // Check status from DB
+    status, found, err := h.db.GetStatus(ctx, studyUID)
+     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+     if err != nil {
+         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check study status"})
+         return
+     }
+     if !found { // Treat not found in DB as not 'hot' (or return 404 maybe?)
+         logAttrs = append(logAttrs, "status", "unknown (not in DB)")
+         slog.InfoContext(ctx, "Instance preview requested but study status unknown", logAttrs...)
+         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
+         return
+     }
+
+    logAttrs = append(logAttrs, "status", status)
+    slog.DebugContext(ctx, "Checking preview status from DB", logAttrs...)
+
+    // --- IMPORTANT: Only serve preview if 'hot' ---
+    if status.Tier != "hot" { // Compare against actual tier string
+        slog.InfoContext(ctx, "Instance preview requested but study not 'hot'", logAttrs...)
+        c.JSON(http.StatusAccepted, gin.H{ // Or 412
+            "message": fmt.Sprintf("Preview not available (Study status: %s)", status.Tier),
+            "status":  status,
+        })
+        return
+    }
+    // ------------------------------------------
+
+    // If hot, proceed...
+    slog.InfoContext(ctx, "Fetching instance preview from Orthanc", logAttrs...)
+    imageData, contentType, err := h.orthancClient.GetInstancePreview(instanceUID)
+     // ... (rest of existing preview handler error handling and response) ...
+    if err != nil { /* ... handle Orthanc errors ... */ return }
+    c.Header("Content-Type", contentType)
+    c.Data(http.StatusOK, contentType, imageData)
+}
+
+// GetInstanceSimplifiedTagsHandler - needs modification to use DB status check
+func (h *APIHandler) GetInstanceSimplifiedTagsHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    instanceUID := c.Param("instanceUID")
+    if studyUID == "" || instanceUID == "" { /* ... handle error ... */ return }
+
+    // Check status from DB
+    status, found, err := h.db.GetStatus(ctx, studyUID)
+     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+     if err != nil { /* ... handle internal error ... */ return }
+     if !found { /* ... handle not found / return default ... */
+         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
+         return
+     }
+
+    logAttrs = append(logAttrs, "status", status)
+    slog.DebugContext(ctx, "Checking tags status from DB", logAttrs...)
+
+    // Only proceed if 'hot'
+    if status.Tier != "hot" { /* ... return error/message ... */ return }
+
+    // If hot, proceed...
+    slog.InfoContext(ctx, "Fetching instance tags from Orthanc", logAttrs...)
+    tags, err := h.orthancClient.GetInstanceSimplifiedTags(instanceUID)
+    // ... (rest of existing tags handler error handling and response) ...
+     if err != nil { /* ... handle Orthanc errors ... */ return }
+    c.JSON(http.StatusOK, tags)
+}
+
+// GetInstanceFileHandler - needs modification to use DB status check
+func (h *APIHandler) GetInstanceFileHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    instanceUID := c.Param("instanceUID")
+    if studyUID == "" || instanceUID == "" { /* ... handle error ... */ return }
+
+    // Check status from DB
+    status, found, err := h.db.GetStatus(ctx, studyUID)
+     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+     if err != nil { /* ... handle internal error ... */ return }
+     if !found { /* ... handle not found / return default ... */
+         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
+         return
+     }
+
+    logAttrs = append(logAttrs, "status", status)
+    slog.DebugContext(ctx, "Checking file request status from DB", logAttrs...)
+
+    // Only serve file if 'hot'
+    if status.Tier != "hot" { /* ... return error/message ... */ return }
+
+    // If hot, proceed...
+    slog.InfoContext(ctx, "Fetching instance file from Orthanc", logAttrs...)
+    dicomData, err := h.orthancClient.GetInstanceFile(instanceUID)
+    // ... (rest of existing file handler error handling and response) ...
+    if err != nil { /* ... handle Orthanc errors ... */ return }
+    c.Header("Content-Type", contentTypeDICOM)
+    c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.dcm\"", instanceUID))
+    c.Writer.Write(dicomData) // Use Write for []byte
+}
+func (h *APIHandler) ListStudyInstancesHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID") // This is likely the Orthanc Study ID from ListStudiesHandler result
 	if studyUID == "" {
+		slog.WarnContext(ctx, "Missing studyUID parameter for listing instances")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID parameter"})
 		return
 	}
 
-	var req MoveRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request body: %v", err)})
-		return
-	}
+    logAttrs := []any{"orthancStudyID", studyUID}
+	slog.InfoContext(ctx, "Handling list instances for study request", logAttrs...)
 
-	fmt.Printf("Received request to move study %s to Tier: %s, Location: %s\n",
-		studyUID, req.TargetTier, req.TargetLocation)
-
-	// --- Mock Implementation ---
-	newStatus := LocationStatus{ Tier: req.TargetTier }
-	if req.TargetTier == "hot" && req.TargetLocation != "" {
-		newStatus.LocationType = "edge"
-		newStatus.EdgeID = req.TargetLocation
-	} else if req.TargetTier != "hot" {
-		newStatus.LocationType = "cloud"
-		newStatus.EdgeID = ""
-	} else {
-		newStatus.LocationType = "unknown"
-	}
-
-	setStudyStatus(studyUID, newStatus) // Use helper from state.go
-
-	fmt.Printf("Updated mock status for study %s: %v\n", studyUID, newStatus)
-
-	c.JSON(http.StatusAccepted, gin.H{
-		"message":      "Move request received, processing initiated (mock).",
-		"currentStatus": newStatus,
-	})
-}
-
-// GetInstancePreviewHandler - checks status before calling client
-func (h *APIHandler) GetInstancePreviewHandler(c *gin.Context) {
-	studyUID := c.Param("studyUID")
-	instanceUID := c.Param("instanceUID")
-	if studyUID == "" || instanceUID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID or instanceUID parameter"})
-		return
-	}
-
-	status, _ := getStudyStatus(studyUID) // Use helper from state.go
-	fmt.Printf("Checking preview for instance %s in study %s. Status: %+v\n", instanceUID, studyUID, status)
-
-	if status.Tier != "hot" {
-		c.JSON(http.StatusAccepted, gin.H{
-			"message": fmt.Sprintf("Image is in '%s' storage (Location: %s). Direct retrieval not available or implemented yet.", status.Tier, status.LocationType),
-			"status":  status,
-		})
-		return
-	}
-
-	// If hot, proceed...
-	imageData, contentType, err := h.orthancClient.GetInstancePreview(instanceUID)
+	instances, err := h.orthancClient.GetStudyInstances(ctx, studyUID) // Pass context
 	if err != nil {
-		fmt.Printf("Error getting instance preview (UID: %s): %v\n", instanceUID, err)
-		if strings.Contains(err.Error(), "not found (404)") {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Instance %s not found", instanceUID)})
-		} else {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve instance preview from Orthanc"})
-		}
+        logAttrs = append(logAttrs, "error", err)
+		slog.ErrorContext(ctx, "Failed to list instances from Orthanc", logAttrs...)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve instance list from storage"})
 		return
 	}
 
-	c.Header("Content-Type", contentType)
-	c.Data(http.StatusOK, contentType, imageData)
-}
-
-// GetInstanceSimplifiedTagsHandler - checks status before calling client
-func (h *APIHandler) GetInstanceSimplifiedTagsHandler(c *gin.Context) {
-    studyUID := c.Param("studyUID")
-	instanceUID := c.Param("instanceUID")
-	if studyUID == "" || instanceUID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID or instanceUID parameter"})
-		return
-	}
-
-	status, _ := getStudyStatus(studyUID) // Use helper from state.go
-    fmt.Printf("Checking tags for instance %s in study %s. Status: %+v\n", instanceUID, studyUID, status)
-
-	if status.Tier != "hot" {
-		c.JSON(http.StatusAccepted, gin.H{
-			"message": fmt.Sprintf("Image is in '%s' storage (Location: %s). Metadata retrieval not available or implemented yet.", status.Tier, status.LocationType),
-			"status":  status,
-		})
-		return
-	}
-
-	// If hot, proceed...
-	tags, err := h.orthancClient.GetInstanceSimplifiedTags(instanceUID)
-	if err != nil {
-		fmt.Printf("Error getting instance simplified tags (UID: %s): %v\n", instanceUID, err)
-		if strings.Contains(err.Error(), "not found (404)") {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Instance %s not found", instanceUID)})
-		} else {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve instance tags from Orthanc"})
-		}
-		return
-	}
-	c.JSON(http.StatusOK, tags)
-}
-
-// GetInstanceFileHandler - checks status before calling client
-func (h *APIHandler) GetInstanceFileHandler(c *gin.Context) {
-    studyUID := c.Param("studyUID")
-	instanceUID := c.Param("instanceUID")
-	if studyUID == "" || instanceUID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID or instanceUID parameter"})
-		return
-	}
-
-	status, _ := getStudyStatus(studyUID) // Use helper from state.go
-    fmt.Printf("Checking file for instance %s in study %s. Status: %+v\n", instanceUID, studyUID, status)
-
-	if status.Tier != "hot" {
-		c.JSON(http.StatusAccepted, gin.H{
-			"message": fmt.Sprintf("Image is in '%s' storage (Location: %s). Direct retrieval not available or implemented yet.", status.Tier, status.LocationType),
-			"status":  status,
-		})
-		return
-	}
-
-	// If hot, proceed...
-	dicomData, err := h.orthancClient.GetInstanceFile(instanceUID)
-	if err != nil {
-		fmt.Printf("Error getting instance file (UID: %s): %v\n", instanceUID, err)
-		if strings.Contains(err.Error(), "not found (404)") {
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Instance %s not found", instanceUID)})
-		} else {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve instance file from Orthanc"})
-		}
-		return
-	}
-	c.Header("Content-Type", contentTypeDICOM)
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.dcm\"", instanceUID))
-	c.Data(http.StatusOK, contentTypeDICOM, dicomData)
+    logAttrs = append(logAttrs, "count", len(instances))
+	slog.InfoContext(ctx, "Successfully retrieved instance list details", logAttrs...)
+	c.JSON(http.StatusOK, instances) // Return slice of InstanceDetails
 }

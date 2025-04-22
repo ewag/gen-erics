@@ -11,6 +11,7 @@
 
 ## project layout
 
+```
 gen-erics/
 ├── .github/
 │   └── workflows/
@@ -34,6 +35,9 @@ gen-erics/
 │   └── Dockerfile               # Multi-stage Dockerfile for Go backend
 │
 ├── frontend/                    # JavaScript DICOM Viewer (e.g., based on Cyclops) (unsure of this)
+|   ├── index.html     # The main page structure
+|   ├── style.css      # Basic styling
+|   |── app.js         # JavaScript logic for API calls and UI updates
 │   ├── src/
 │   ├── public/
 │   ├── package.json
@@ -64,6 +68,7 @@ gen-erics/
 │   └── setup.md
 │
 └── README.md                    # Project overview, setup instructions
+```
 
 
 ## update go modules
@@ -117,3 +122,68 @@ curl -X POST -H "Content-Type: application/json" -d '{"targetTier": "warm"}' htt
 curl http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/location
 
 ```
+
+# Setting up frontend
+```bash
+# Make sure you have Node.js and npm installed (https://nodejs.org/)
+# Navigate OUTSIDE the frontend directory first if needed
+# cd ..
+
+# Create a new vanilla JS project with Vite INSIDE the frontend directory
+# (Choose 'vanilla' and then 'javascript' when prompted)
+npm create vite@latest frontend -- --template vanilla
+
+# Navigate into the new frontend directory
+cd frontend
+
+# Install necessary Cornerstone libraries and dicom-parser (needed by loaders)
+npm install @cornerstonejs/core @cornerstonejs/tools @cornerstonejs/streaming-image-volume-loader dicom-parser
+
+# Install dev dependencies (optional but helpful)
+npm install --save-dev vite
+
+# Clean up default Vite files if needed (like counter.js, javascript.svg)
+# Keep main.js, style.css, index.html
+```
+
+# Testing and setting up in a dev environment. 
+
+Here we ae trying to setup a dev environment where I can look at logs, and iterate on the go code. This was a little annoying to setup well, so I hope it works going forward. This local dev setup is not meant to be used in production, but hopefully, because of this work, logging and OTEL in production will be easier.
+
+## k3d cluster setup
+
+```bash
+k3d cluster create dev-cluster \
+  --agents 1 \
+  --port '8080:80@loadbalancer' \
+  --port '8443:443@loadbalancer' \
+  --wait
+```
+
+## notes:
+
+k3d cluster create dev-cluster: Creates a new cluster named dev-cluster.
+- --agents 1: Adds one worker node (good practice).
+- --port '8080:80@loadbalancer': Maps port 8080 on your Mac (localhost:8080) to port 80 on k3d's internal service load balancer (which fronts Traefik). This handles HTTP traffic.
+- --port '8443:443@loadbalancer': Maps port 8443 on your Mac (localhost:8443) to port 443 on k3d's internal service load balancer. This handles HTTPS traffic.
+- --wait: Waits for the cluster nodes to be ready.
+
+## installing gen-erics
+
+```bash
+helm install dev infrastructure/helm/gen-erics
+```
+
+## install signox (monitoring, logging, otel)
+
+```bash
+helm install signoz signoz/signoz \
+  --namespace observability \
+  --create-namespace \
+  --set frontend.ingress.enabled=true \
+  --set 'frontend.ingress.hosts[0].host=signoz.local' \
+  --set frontend.ingress.ingressClassName=traefik \
+  --set global.storageClass=local-path \
+  --wait
+  ```
+

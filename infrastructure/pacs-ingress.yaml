@@ -1,0 +1,45 @@
+# File: pacs-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pacs-ingress       # Name for the Ingress object
+  namespace: default        # Namespace where your app services live
+  annotations:
+    kubernetes.io/ingressClassName: "traefik"
+    # Annotation to potentially handle path stripping if needed by backend:
+    # traefik.ingress.kubernetes.io/router.middlewares: default-stripprefix@kubernetescrd
+    # (Requires creating a Traefik Middleware object named 'default-stripprefix')
+    # For now, we assume the backend handles paths starting with /api/v1
+spec:
+  rules:
+  - host: pacs.local # Hostname for your frontend/backend access
+    http:
+      paths:
+      # Rule for Backend API - Paths starting with /api
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: dev-gen-erics-backend # Your backend service name
+            port:
+              number: 80              # Your backend service port
+      # Rule for Frontend - Catch-all for other paths on this host
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: dev-gen-erics-frontend # Your frontend service name
+            port:
+              number: 80               # Your frontend service port
+
+  # --- Optional: Rule for Orthanc UI on a different hostname ---
+  - host: orthanc.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: dev-gen-erics-orthanc # Your Orthanc service name
+            port:
+              number: 8042             # Your Orthanc HTTP service port

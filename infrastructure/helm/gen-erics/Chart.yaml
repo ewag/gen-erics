@@ -22,3 +22,10 @@ version: 0.1.0
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
 appVersion: "1.16.0"
+
+dependencies:
+  # --- Add this block for PostgreSQL ---
+  - name: postgresql              # This name will be used as the key in values.yaml
+    version: "16.6.3"             # Use a specific recent stable chart version (Check Bitnami chart releases if needed)
+    repository: oci://registry-1.docker.io/bitnamicharts # Location of Bitnami charts
+    condition: postgresql.enabled # Allows us to disable 

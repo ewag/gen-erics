@@ -1,0 +1,90 @@
+body {
+    font-family: sans-serif;
+    margin: 20px;
+    background-color: #f0f0f0;
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+}
+
+#studies-list {
+    margin-top: 20px;
+    display: grid; /* Use grid for potential layout later */
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); /* Responsive columns */
+    gap: 15px;
+}
+
+.study-item {
+    border: 1px solid #ccc;
+    padding: 15px;
+    border-radius: 5px;
+    background-color: #fff;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+}
+
+.study-item h3 {
+    margin-top: 0;
+    font-size: 1.1em;
+    word-break: break-all; /* Handle long UIDs */
+    color: #0056b3;
+}
+
+.study-item p {
+    margin: 8px 0;
+    font-size: 0.95em;
+}
+
+.study-item .status {
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: white;
+}
+.study-item .status.hot { background-color: #d9534f; }
+.study-item .status.warm { background-color: #f0ad4e; }
+.study-item .status.cold { background-color: #5bc0de; }
+.study-item .status.archive { background-color: #777; }
+.study-item .status.unknown { background-color: #aaa; }
+
+
+.study-item .preview {
+    width: 300px;  /* Or desired width */
+    height: 300px; /* Or desired height */
+    margin-top: 10px;
+    background-color: #000; /* Black background typical for viewers */
+    color: white; /* For loading/error text */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative; /* Needed for tool overlays */
+    overflow: hidden; /* Hide parts of image when zoomed/panned */
+}
+
+.study-item .preview img {
+    /* We won't use the img tag directly with Cornerstone rendering */
+   display: none;
+}
+
+.study-item .controls {
+    margin-top: 10px;
+    border-top: 1px solid #eee;
+    padding-top: 10px;
+}
+.study-item button {
+    margin-right: 5px;
+    margin-top: 5px;
+    padding: 6px 12px;
+    cursor: pointer;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #e7e7e7;
+}
+.study-item button:hover {
+    background-color: #ddd;
+}
+.study-item button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}

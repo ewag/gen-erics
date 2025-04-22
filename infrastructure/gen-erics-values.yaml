@@ -1,0 +1,156 @@
+# Default values for gen-erics.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Backend service configuration
+backend:
+  replicaCount: 1
+  containerPort: 8000
+  imagePullSecretsName: ghcr-pull-secret
+  image:
+    repository: ghcr.io/ewag/gen-erics-backend
+    tag: k3d-test-0.1.8
+    pullPolicy: IfNotPresent
+  debug: "False"
+  probes:
+    liveness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+      successThreshold: 1
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+      successThreshold: 1
+  service:
+    type: ClusterIP
+    port: 80
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/ewag/gen-erics-frontend
+    tag: k3d-test-0.1.1
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+
+ # Resource limits and requests (adjust as needed)
+  resources: {}
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+# Orthanc service configuration
+orthanc:
+  image: orthancteam/orthanc
+  tag: 22.6.1
+  pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    httpPort: 8042
+    dicomPort: 4242
+  storage:
+    size: 10Gi
+
+
+# Standard Helm chart values
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# Pod and deployment configuration
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# Service configuration (for other services, not Orthanc)
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources: {}
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+
+volumes: []
+volumeMounts: []
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+postgresql:
+  # Ensure this subchart is installed when the main chart is installed
+  enabled: true
+
+  # --- Authentication and Database ---
+  auth:
+    # Name of the database to be created automatically
+    database: "pacs_status"
+    # Username the Go application will use to connect
+    username: "pacsuser"
+    # Password for the application user
+    # !!! SECURITY WARNING: Use a generated secret in production !!!
+    # For local development, we set a simple password here.
+    password: "localdevpassword"
+    # You can also set the main 'postgres' admin password if needed:
+    # postgresPassword: "adminpassword"
+    # Or use an existing Kubernetes secret for passwords (recommended for production)
+    # existingSecret: "my-postgres-secret"
+    # enablePostgresUser: true # Set if you want the 'postgres' user created with postgresPassword
+
+  # --- Persistence Configuration ---
+  primary: # Configuration for the primary PostgreSQL node
+    persistence:
+      enabled: true              # Persist data within the k3d volume
+      storageClass: "local-path" # Use k3d's default storage provider
+      size: 2Gi                  # Initial size for the database volume 
