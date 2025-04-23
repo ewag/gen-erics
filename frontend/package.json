@@ -9,10 +9,14 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "^6.3.2"
+    "@originjs/vite-plugin-commonjs": "^1.0.3",
+    "@vitejs/plugin-react": "^4.4.1",
+    "vite": "^6.3.2",
+    "vite-plugin-static-copy": "^2.3.1"
   },
   "dependencies": {
     "@cornerstonejs/core": "^3.10.27",
+    "@cornerstonejs/dicom-image-loader": "^3.10.29",
     "@cornerstonejs/streaming-image-volume-loader": "^1.86.1",
     "@cornerstonejs/tools": "^3.10.27",
     "dicom-parser": "^1.8.21"

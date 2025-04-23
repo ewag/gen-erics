@@ -127,3 +127,30 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+postgresql:
+  # Ensure this subchart is installed when the main chart is installed
+  enabled: true
+
+  # --- Authentication and Database ---
+  auth:
+    # Name of the database to be created automatically
+    database: "pacs_status"
+    # Username the Go application will use to connect
+    username: "pacsuser"
+    # Password for the application user
+    # !!! SECURITY WARNING: Use a generated secret in production !!!
+    # For local development, we set a simple password here.
+    password: "localdevpassword"
+    # You can also set the main 'postgres' admin password if needed:
+    # postgresPassword: "adminpassword"
+    # Or use an existing Kubernetes secret for passwords (recommended for production)
+    # existingSecret: "my-postgres-secret"
+    # enablePostgresUser: true # Set if you want the 'postgres' user created with postgresPassword
+
+  # --- Persistence Configuration ---
+  primary: # Configuration for the primary PostgreSQL node
+    persistence:
+      enabled: true              # Persist data within the k3d volume
+      storageClass: "local-path" # Use k3d's default storage provider
+      size: 2Gi                  # Initial size for the database volume 

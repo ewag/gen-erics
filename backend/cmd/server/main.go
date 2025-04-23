@@ -131,15 +131,19 @@ func main() {
 	// --- End OTel Init ---
 
 	// --- Configure Slog to use OTel Bridge (Corrected) ---
-	loggerProvider := global.GetLoggerProvider()
-	// Create the OTel handler, passing the service name and necessary options
-	otelHandler := otelslog.NewHandler(serviceName, // Pass service name as string
-		otelslog.WithLoggerProvider(loggerProvider),
+	loggerProvider := global.GetLoggerProvider()        // Get the globally set provider
+
+	// Create the slog handler using the OTel bridge
+	otelHandler := otelslog.NewHandler(
+		serviceName,
+		otelslog.WithLoggerProvider(loggerProvider), // Pass necessary options
+		// otelslog.WithLeveler(slog.LevelDebug),
 	)
-	// Set the OTel handler as the default for slog
+
+	// Set this OTel handler as the default for slog
 	slog.SetDefault(slog.New(otelHandler))
 	slog.Info("OTel logging initialized and set as slog default (using OTLP/gRPC)")
-    // --- End Slog Setup ---
+	// --- End Slog Setup ---
 
 	// Handle graceful shutdown for OTel AND DB Pool
 	defer func() {

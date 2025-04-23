@@ -250,7 +250,13 @@ func (h *APIHandler) GetInstanceFileHandler(c *gin.Context) {
     slog.DebugContext(ctx, "Checking file request status from DB", logAttrs...)
 
     // Only serve file if 'hot'
-    if status.Tier != "hot" { /* ... return error/message ... */ return }
+    if status.Tier != "hot" { // Check if tier is NOT "hot"
+    slog.InfoContext(ctx, "Instance file requested but study not 'hot'", logAttrs...) // Log the reason
+    c.JSON(http.StatusPreconditionFailed, gin.H{ // Send 412 status and JSON error body
+        "error": fmt.Sprintf("Instance file not available locally (status: %s)", status.Tier),
+    })
+    return // Stop processing the request here
+    }
 
     // If hot, proceed...
     slog.InfoContext(ctx, "Fetching instance file from Orthanc", logAttrs...)
