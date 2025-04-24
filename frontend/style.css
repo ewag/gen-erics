@@ -1,90 +1,365 @@
-body {
-    font-family: sans-serif;
-    margin: 20px;
-    background-color: #f0f0f0;
+// Enhanced application initialization with error handling
+
+// Add CSS styles for better UI feedback
+function addStyles() {
+    const styleElement = document.createElement('style');
+    styleElement.textContent = `
+        /* Status indicator styling */
+        .status-text {
+            transition: background-color 0.3s ease;
+            padding: 2px 6px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        
+        .status.hot { background-color: #d9534f; color: white; }
+        .status.cold { background-color: #5bc0de; color: white; }
+        .status.archive { background-color: #777; color: white; }
+        .status.unknown, .status.error { background-color: #aaa; color: white; }
+        
+        .status-updated {
+            animation: flash-success 1.5s ease;
+        }
+        
+        @keyframes flash-success {
+            0%, 100% { background-color: inherit; }
+            50% { background-color: #4CAF50; }
+        }
+        
+        /* Loading spinner */
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Button styles */
+        .action-button {
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .action-button:hover:not(:disabled) {
+            background-color: #e0e0e0;
+            border-color: #999;
+        }
+        
+        .action-button:active:not(:disabled) {
+            background-color: #d0d0d0;
+            transform: translateY(1px);
+        }
+        
+        .action-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        /* Refresh button styling */
+        #refresh-all-button {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 5px 15px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+        
+        #refresh-all-button:hover {
+            background-color: #e9ecef;
+            border-color: #bbb;
+        }
+        
+        /* Error message styling */
+        .error-message {
+            color: #d9534f;
+            background-color: #f2dede;
+            border: 1px solid #ebccd1;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        
+        /* Initial loading animation */
+        .init-loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .init-loading .status {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        
+        /* Improved study item layout */
+        .study-item {
+            transition: box-shadow 0.3s ease;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: white;
+        }
+        
+        .study-item:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        /* Preview area styling */
+        .preview-area {
+            width: 256px;
+            height: 256px;
+            background-color: black;
+            color: white;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+    `;
+    document.head.appendChild(styleElement);
 }
 
-h1 {
-    text-align: center;
-    color: #333;
+// Improved initial app load with better error handling
+async function initializeApp() {
+    console.log('Initializing App...');
+    const studiesListElement = document.getElementById('studies-list');
+    
+    if (!studiesListElement) {
+        console.error("Could not find #studies-list element!");
+        alert("Application error: Could not find studies list element");
+        return;
+    }
+    
+    // Show initialization loading state
+    studiesListElement.innerHTML = `
+        <div class="init-loading">
+            <div class="loading-spinner"></div>
+            <p class="status">Initializing Cornerstone...</p>
+        </div>
+    `;
+    
+    try {
+        // First initialize Cornerstone
+        console.log('Starting Cornerstone initialization...');
+        await initializeCornerstone();
+        
+        // Update loading status
+        if (studiesListElement) {
+            studiesListElement.innerHTML = `
+                <div class="init-loading">
+                    <div class="loading-spinner"></div>
+                    <p class="status">Loading studies from API...</p>
+                </div>
+            `;
+        }
+        
+        // Then fetch and display studies
+        await fetchStudies();
+        console.log('Application initialization complete.');
+        
+    } catch (error) {
+        console.error('Application initialization failed:', error);
+        
+        // Show error message with retry option
+        if (studiesListElement) {
+            studiesListElement.innerHTML = `
+                <div class="error-message">
+                    <h3>Error initializing application</h3>
+                    <p>${error.message || 'Unknown error'}</p>
+                    <button id="retry-init" style="margin-top: 15px; padding: 8px 16px;">
+                        Retry
+                    </button>
+                </div>
+            `;
+            
+            // Add retry button functionality
+            const retryButton = document.getElementById('retry-init');
+            if (retryButton) {
+                retryButton.onclick = initializeApp;
+            }
+        }
+    }
 }
 
-#studies-list {
-    margin-top: 20px;
-    display: grid; /* Use grid for potential layout later */
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); /* Responsive columns */
-    gap: 15px;
+// Modified fetchStudies function with better error handling
+async function fetchStudies() {
+    console.log('Fetching studies from backend...');
+    const studiesListElement = document.getElementById('studies-list');
+    
+    try {
+        // Fetch studies list from API
+        const studiesResponse = await fetch(`${API_BASE_URL}/studies`);
+        
+        // Handle HTTP errors
+        if (!studiesResponse.ok) {
+            let errorMsg = `Studies fetch failed: ${studiesResponse.status}`;
+            
+            try {
+                const errorData = await studiesResponse.json();
+                errorMsg = errorData.error || errorData.message || errorMsg;
+            } catch (e) {
+                console.warn('Could not parse error response as JSON', e);
+            }
+            
+            throw new Error(errorMsg);
+        }
+        
+        // Parse studies data
+        const studiesData = await studiesResponse.json();
+        
+        // Validate response format
+        if (!Array.isArray(studiesData)) {
+            throw new Error('Invalid study data received: expected an array');
+        }
+        
+        console.log(`Fetched ${studiesData.length} studies from backend`);
+        
+        // Show empty state if no studies
+        if (studiesData.length === 0) {
+            if (studiesListElement) {
+                studiesListElement.innerHTML = `
+                    <div style="text-align: center; padding: 20px;">
+                        <p>No studies found in Orthanc.</p>
+                        <button id="refresh-studies" style="margin-top: 10px; padding: 8px 16px;">
+                            Refresh
+                        </button>
+                    </div>
+                `;
+                
+                // Add refresh button functionality
+                const refreshButton = document.getElementById('refresh-studies');
+                if (refreshButton) {
+                    refreshButton.onclick = fetchStudies;
+                }
+            }
+            return;
+        }
+        
+        // Render studies
+        renderUI(studiesData);
+        
+    } catch (error) {
+        console.error('Failed to fetch or process studies:', error);
+        
+        // Show error message with retry option
+        if (studiesListElement) {
+            studiesListElement.innerHTML = `
+                <div class="error-message">
+                    <h3>Error loading studies</h3>
+                    <p>${error.message || 'Unknown error'}</p>
+                    <button id="retry-fetch" style="margin-top: 15px; padding: 8px 16px;">
+                        Retry
+                    </button>
+                </div>
+            `;
+            
+            // Add retry button functionality
+            const retryButton = document.getElementById('retry-fetch');
+            if (retryButton) {
+                retryButton.onclick = fetchStudies;
+            }
+        }
+    }
 }
 
-.study-item {
-    border: 1px solid #ccc;
-    padding: 15px;
-    border-radius: 5px;
-    background-color: #fff;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+// Modified renderUI function to handle component lifecycle better
+function renderUI(studiesToRender) {
+    const studiesListElement = document.getElementById('studies-list');
+    if (!studiesListElement) return;
+    
+    // Clear previous content
+    studiesListElement.innerHTML = '';
+    
+    // Track pending operations for better UX
+    let pendingOperations = 0;
+    const totalOperations = studiesToRender.length;
+    
+    // Function to update loading status
+    const updateLoadingStatus = () => {
+        pendingOperations--;
+        if (pendingOperations <= 0) {
+            console.log('All studies rendered and status fetched');
+            // Any post-render actions can go here
+        }
+    };
+    
+    // Process each study
+    studiesToRender.forEach(study => {
+        if (!study || !study.ID) return;
+        pendingOperations++;
+        
+        // Create study element with basic info
+        const studyElement = renderStudyItem(study);
+        studiesListElement.appendChild(studyElement);
+        
+        // Fetch location status
+        fetchLocation(study.ID)
+            .then(status => {
+                // Update study with status
+                study.LocationStatus = status || { tier: 'unknown', locationType: 'error' };
+                studyElement._study = study; // Store study data in element
+                
+                // If study is 'hot', try to fetch instances for preview
+                if (status && status.tier === 'hot') {
+                    pendingOperations++;
+                    
+                    fetchStudyInstances(study.ID)
+                        .then(instances => {
+                            if (instances && instances.length > 0) {
+                                study.SampleInstanceID = instances[0].ID;
+                            }
+                            // Update UI with all data
+                            updateStudyDisplay(study, studyElement);
+                            updateLoadingStatus();
+                        })
+                        .catch(error => {
+                            console.error(`Failed to fetch instances for study ${study.ID}:`, error);
+                            updateStudyDisplay(study, studyElement);
+                            updateLoadingStatus();
+                        });
+                } else {
+                    // Update UI without instances for non-hot studies
+                    updateStudyDisplay(study, studyElement);
+                }
+                
+                updateLoadingStatus();
+            })
+            .catch(error => {
+                console.error(`Failed to get location for study ${study.ID}:`, error);
+                study.LocationStatus = { tier: 'error', locationType: `Error: ${error.message}` };
+                studyElement._study = study;
+                updateStudyDisplay(study, studyElement);
+                updateLoadingStatus();
+            });
+    });
 }
 
-.study-item h3 {
-    margin-top: 0;
-    font-size: 1.1em;
-    word-break: break-all; /* Handle long UIDs */
-    color: #0056b3;
-}
-
-.study-item p {
-    margin: 8px 0;
-    font-size: 0.95em;
-}
-
-.study-item .status {
-    font-weight: bold;
-    padding: 2px 6px;
-    border-radius: 3px;
-    color: white;
-}
-.study-item .status.hot { background-color: #d9534f; }
-.study-item .status.warm { background-color: #f0ad4e; }
-.study-item .status.cold { background-color: #5bc0de; }
-.study-item .status.archive { background-color: #777; }
-.study-item .status.unknown { background-color: #aaa; }
-
-
-.study-item .preview {
-    width: 300px;  /* Or desired width */
-    height: 300px; /* Or desired height */
-    margin-top: 10px;
-    background-color: #000; /* Black background typical for viewers */
-    color: white; /* For loading/error text */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative; /* Needed for tool overlays */
-    overflow: hidden; /* Hide parts of image when zoomed/panned */
-}
-
-.study-item .preview img {
-    /* We won't use the img tag directly with Cornerstone rendering */
-   display: none;
-}
-
-.study-item .controls {
-    margin-top: 10px;
-    border-top: 1px solid #eee;
-    padding-top: 10px;
-}
-.study-item button {
-    margin-right: 5px;
-    margin-top: 5px;
-    padding: 6px 12px;
-    cursor: pointer;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background-color: #e7e7e7;
-}
-.study-item button:hover {
-    background-color: #ddd;
-}
-.study-item button:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-}
+// Initialize app when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // Add CSS styles
+    addStyles();
+    
+    // Start app initialization
+    initializeApp();
+});

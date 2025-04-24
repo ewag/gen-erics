@@ -18,6 +18,7 @@ import (
 type StatusStore interface {
 	GetStatus(ctx context.Context, studyUID string) (*models.LocationStatus, bool, error) // Returns status, found boolean, error
 	SetStatus(ctx context.Context, studyUID string, status models.LocationStatus) error
+	Ping(ctx context.Context) error
 }
 
 // Store handles database operations.
@@ -96,4 +97,8 @@ func (s *Store) SetStatus(ctx context.Context, studyUID string, status models.Lo
 
 	slog.DebugContext(ctx, "Successfully set study status", "studyUID", studyUID, "rowsAffected", commandTag.RowsAffected())
 	return nil
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+    return s.pool.Ping(ctx)
 }

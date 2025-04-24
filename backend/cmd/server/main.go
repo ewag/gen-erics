@@ -13,9 +13,9 @@ import (
 	"time"
 
 	// PGX Pool Import
-	"github.com/jackc/pgx/v5/pgxpool" // <<< ADDED IMPORT
+	"github.com/jackc/pgx/v5/pgxpool"
 
-	// OTel Imports (ensure log related ones are uncommented)
+	// OTel Imports
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -42,11 +42,9 @@ import (
 	"github.com/ewag/gen-erics/backend/internal/api"
 	"github.com/ewag/gen-erics/backend/internal/config"
 	"github.com/ewag/gen-erics/backend/internal/orthanc"
-	"github.com/ewag/gen-erics/backend/internal/storage" // <<< Import storage package
+	"github.com/ewag/gen-erics/backend/internal/storage"
 )
 
-// --- initOtelProvider function remains the same (with logging enabled) ---
-// ... (paste the full initOtelProvider function here) ...
 func initOtelProvider(ctx context.Context, serviceName, serviceVersion, otelEndpoint string) (shutdown func(context.Context) error, err error) {
     res, err := resource.New(ctx, resource.WithAttributes(semconv.ServiceName(serviceName), semconv.ServiceVersion(serviceVersion)))
 	if err != nil { return nil, fmt.Errorf("failed to create OTel resource: %w", err) }
@@ -77,6 +75,41 @@ func initOtelProvider(ctx context.Context, serviceName, serviceVersion, otelEndp
 	return shutdown, nil
 }
 
+// This function is correctly defined at the package level
+func checkDatabaseSetup(ctx context.Context, db *pgxpool.Pool) error {
+    // Check if study_status table exists
+    var exists bool
+    err := db.QueryRow(ctx, `
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'study_status'
+        )
+    `).Scan(&exists)
+    
+    if err != nil {
+        return fmt.Errorf("failed to check if table exists: %w", err)
+    }
+    
+    if !exists {
+        slog.Warn("study_status table does not exist, creating it now")
+        _, err := db.Exec(ctx, `
+            CREATE TABLE study_status (
+                study_instance_uid TEXT PRIMARY KEY,
+                tier TEXT NOT NULL,
+                location_type TEXT NOT NULL,
+                edge_id TEXT,
+                last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        `)
+        if err != nil {
+            return fmt.Errorf("failed to create study_status table: %w", err)
+        }
+        slog.Info("Created study_status table successfully")
+    }
+    
+    return nil
+}
 
 // --- Main Function ---
 func main() {
@@ -95,60 +128,59 @@ func main() {
 		os.Exit(1)
 	}
 
-	// --- Initialize Database Connection Pool (NEW BLOCK) ---
+	// --- Initialize Database Connection Pool ---
 	// Construct DSN (Data Source Name) using config values
-	// Format: postgres://username:password@host:port/database_name
 	dbConnString := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		cfg.DBUser, cfg.DBPassword, cfg.DBHost, cfg.DBPort, cfg.DBName)
 
 	slog.Info("Attempting to connect to PostgreSQL", "host", cfg.DBHost, "db", cfg.DBName)
-	dbPool, err := pgxpool.New(ctx, dbConnString) // Use app context
+	dbPool, err := pgxpool.New(ctx, dbConnString)
 	if err != nil {
 		slog.Error("Unable to create connection pool", "error", err)
-		os.Exit(1) // Exit if DB connection fails on startup
+		os.Exit(1)
 	}
+
 	// Ping the database to verify immediate connectivity
 	if err := dbPool.Ping(ctx); err != nil {
 		slog.Error("Unable to ping database on startup", "error", err)
-		dbPool.Close() // Close pool even if ping fails
+		dbPool.Close()
 		os.Exit(1)
 	}
 	slog.Info("Successfully connected to PostgreSQL database")
-	// dbPool variable is now available
-	// --- End Database Init ---
+	
+	// Check and setup database tables if needed
+	if err := checkDatabaseSetup(ctx, dbPool); err != nil {
+		slog.Error("Failed to setup database tables", "error", err)
+		dbPool.Close()
+		os.Exit(1)
+	}
 
 	// --- Initialize OTel ---
-	otelEndpoint := cfg.OtelEndpoint // Uses port 4317 from config default
+	otelEndpoint := cfg.OtelEndpoint
 	serviceName := cfg.OtelServiceName
 	serviceVersion := cfg.OtelServiceVersion
 
 	otelShutdown, err := initOtelProvider(ctx, serviceName, serviceVersion, otelEndpoint)
 	if err != nil {
 		slog.Error("Failed to initialize OTel provider", "error", err)
-		dbPool.Close() // Close DB pool if OTel fails
+		dbPool.Close()
 		os.Exit(1)
 	}
-	// --- End OTel Init ---
 
-	// --- Configure Slog to use OTel Bridge (Corrected) ---
-	loggerProvider := global.GetLoggerProvider()        // Get the globally set provider
+	// --- Configure Slog to use OTel Bridge ---
+	loggerProvider := global.GetLoggerProvider()
 
-	// Create the slog handler using the OTel bridge
 	otelHandler := otelslog.NewHandler(
 		serviceName,
-		otelslog.WithLoggerProvider(loggerProvider), // Pass necessary options
-		// otelslog.WithLeveler(slog.LevelDebug),
+		otelslog.WithLoggerProvider(loggerProvider),
 	)
 
-	// Set this OTel handler as the default for slog
 	slog.SetDefault(slog.New(otelHandler))
 	slog.Info("OTel logging initialized and set as slog default (using OTLP/gRPC)")
-	// --- End Slog Setup ---
 
 	// Handle graceful shutdown for OTel AND DB Pool
 	defer func() {
-		// Use a separate context for shutdown in case the main one is canceled early
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second) // Slightly longer timeout
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
 		slog.Info("Shutting down OTel providers...")
@@ -159,25 +191,22 @@ func main() {
 		}
 
 		slog.Info("Closing database connection pool...")
-		dbPool.Close() // <-- ADDED: Close the pool
+		dbPool.Close()
 		slog.Info("Database connection pool closed.")
 	}()
 
-	// --- Initialize Dependencies ---
-	// TODO: Move struct definitions (LocationStatus) to a shared place like internal/models
-	// TODO: Create storage layer (internal/storage) that takes dbPool
 	// --- Create Storage instance ---
-    store := storage.NewStore(dbPool) // <<< Create store
+	store := storage.NewStore(dbPool)
 
-    // --- Pass storage instance to API Handler ---
-	
-    
-
+	// --- Setup HTTP clients ---
 	orthancBaseClient := &http.Client{Timeout: cfg.HttpClientTimeout}
 	instrumentedTransport := otelhttp.NewTransport(orthancBaseClient.Transport)
 	instrumentedClient := &http.Client{Transport: instrumentedTransport, Timeout: cfg.HttpClientTimeout}
 	orthancClient := orthanc.NewClientWithHttpClient(cfg.OrthancURL, instrumentedClient)
-	handler := api.NewAPIHandler(orthancClient, store) // <<< Update constructor call
+	
+	// --- Create API handler ---
+	handler := api.NewAPIHandler(orthancClient, store)
+	
 	// --- Setup Gin Router ---
 	router := gin.Default()
 	corsConfig := cors.DefaultConfig()
@@ -188,7 +217,6 @@ func main() {
 	router.Use(otelgin.Middleware(serviceName))
 	api.RegisterRoutes(router, handler)
 
-
 	// --- Start Server ---
 	slog.Info("Starting HTTP server", "address", cfg.ListenAddress)
 	srv := &http.Server{
@@ -198,9 +226,6 @@ func main() {
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Server listen failed", "error", err)
-			// Attempt a clean shutdown of DB/OTel before exiting
-			// Cannot call the main defer directly, maybe trigger cancellation?
-			// For now, just exit. Consider more robust shutdown on listen failure later.
 			os.Exit(1)
 		}
 	}()
@@ -213,9 +238,7 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Server forced to shutdown", "error", err)
-		// OTel/DB shutdown defer will still run
 		os.Exit(1)
 	}
 	slog.Info("HTTP Server stopped.")
-	// OTel/DB shutdown runs via defer after this point
 }

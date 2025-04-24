@@ -44,74 +44,6 @@ type MoveRequest struct {
 	TargetLocation string `json:"targetLocation,omitempty"`
 }
 
-// --- Handler Methods ---
-
-func (h *APIHandler) HealthCheckHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-func (h *APIHandler) ListStudiesHandler(c *gin.Context) {
-	ctx := c.Request.Context() // Use request context
-	slog.InfoContext(ctx, "Handling list studies request")
-
-	studyIDs, err := h.orthancClient.ListStudies() // Assumes this returns []string
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to list study IDs from Orthanc", "error", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve study list from storage"})
-		return
-	}
-
-	detailedStudies := make([]*orthanc.StudyDetails, 0, len(studyIDs)) // Pre-allocate slice
-	for _, studyID := range studyIDs {
-		// Fetch details for each study ID
-		details, err := h.orthancClient.GetStudyDetails(ctx, studyID) // Pass context
-		if err != nil {
-			// Log the error for this specific study but continue with others
-			slog.WarnContext(ctx, "Failed to get details for specific study", "orthancStudyID", studyID, "error", err)
-			continue // Skip this study if details fail
-		}
-		if details != nil {
-			detailedStudies = append(detailedStudies, details)
-		}
-	}
-
-	slog.InfoContext(ctx, "Successfully retrieved study list details", "count", len(detailedStudies))
-	c.JSON(http.StatusOK, detailedStudies) // Return the slice of detailed studies
-}
-
-// GetStudyLocationHandler retrieves status from the database
-func (h *APIHandler) GetStudyLocationHandler(c *gin.Context) {
-    ctx := c.Request.Context()
-    studyUID := c.Param("studyUID")
-    if studyUID == "" { /* ... handle error ... */ return }
-
-    // Get status from DB via storage layer
-    status, found, err := h.db.GetStatus(ctx, studyUID)
-    logAttrs := []any{"studyUID", studyUID}
-
-    if err != nil {
-        // Error already logged in storage layer
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve study status"})
-        return
-    }
-
-    if !found {
-        slog.InfoContext(ctx, "No status found for study in DB, returning default 'hot'", logAttrs...)
-        // Define default status if not found in DB
-        defaultStatus := &models.LocationStatus{
-             LocationType: "edge", // Or your appropriate default
-             EdgeID:       nil,    // Default edge ID is null
-             Tier:         "hot",  // Default tier
-        }
-        c.JSON(http.StatusOK, defaultStatus)
-        return
-    }
-
-    // Status found in DB
-    logAttrs = append(logAttrs, "status", status, "foundInDB", found)
-    slog.InfoContext(ctx, "Returning study status from DB", logAttrs...)
-    c.JSON(http.StatusOK, status)
-}
-
 // MoveStudyHandler updates status in the database
 func (h *APIHandler) MoveStudyHandler(c *gin.Context) {
     ctx := c.Request.Context()
@@ -290,4 +222,99 @@ func (h *APIHandler) ListStudyInstancesHandler(c *gin.Context) {
     logAttrs = append(logAttrs, "count", len(instances))
 	slog.InfoContext(ctx, "Successfully retrieved instance list details", logAttrs...)
 	c.JSON(http.StatusOK, instances) // Return slice of InstanceDetails
+}
+// Update this method in your api/handlers.go file
+
+// GetStudyLocationHandler retrieves status from the database
+func (h *APIHandler) GetStudyLocationHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    studyUID := c.Param("studyUID")
+    
+    if studyUID == "" {
+        slog.ErrorContext(ctx, "Empty studyUID parameter")
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID parameter"})
+        return
+    }
+    
+    // Log the exact studyUID being queried to help debug
+    slog.InfoContext(ctx, "Getting study location", "studyUID", studyUID)
+    
+    // Get status from DB via storage layer
+    status, found, err := h.db.GetStatus(ctx, studyUID)
+    
+    if err != nil {
+        // Log the full error details
+        slog.ErrorContext(ctx, "Database error retrieving study status", 
+            "studyUID", studyUID, 
+            "error", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to retrieve study status: %v", err)})
+        return
+    }
+    
+    if !found {
+        slog.InfoContext(ctx, "No status found for study in DB, returning default 'hot'", "studyUID", studyUID)
+        // Define default status if not found in DB
+        defaultStatus := &models.LocationStatus{
+            LocationType: "edge",
+            EdgeID:       nil,
+            Tier:         "hot",
+        }
+        c.JSON(http.StatusOK, defaultStatus)
+        return
+    }
+    
+    // Status found in DB
+    slog.InfoContext(ctx, "Returning study status from DB", "studyUID", studyUID, "status", status)
+    c.JSON(http.StatusOK, status)
+}
+// Update this method in your api/handlers.go file
+
+func (h *APIHandler) HealthCheckHandler(c *gin.Context) {
+    ctx := c.Request.Context()
+    
+    // Check database connectivity
+    err := h.db.Ping(ctx)
+    if err != nil {
+        slog.ErrorContext(ctx, "Database health check failed", "error", err)
+        c.JSON(http.StatusServiceUnavailable, gin.H{
+            "status": "error",
+            "database": "unavailable",
+            "error": err.Error(),
+        })
+        return
+    }
+    
+    c.JSON(http.StatusOK, gin.H{
+        "status": "ok",
+        "database": "connected",
+    })
+}
+// ListStudiesHandler retrieves a list of studies from Orthanc
+func (h *APIHandler) ListStudiesHandler(c *gin.Context) {
+	ctx := c.Request.Context() // Use request context
+	slog.InfoContext(ctx, "Handling list studies request")
+
+	studyIDs, err := h.orthancClient.ListStudies() // Assumes this returns []string
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to list study IDs from Orthanc", "error", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to retrieve study list from storage"})
+		return
+	}
+
+	detailedStudies := make([]*orthanc.StudyDetails, 0, len(studyIDs)) // Pre-allocate slice
+	for _, studyID := range studyIDs {
+		// Fetch details for each study ID
+		details, err := h.orthancClient.GetStudyDetails(ctx, studyID) // Pass context
+		if err != nil {
+			// Log the error for this specific study but continue with others
+			slog.WarnContext(ctx, "Failed to get details for specific study", "orthancStudyID", studyID, "error", err)
+			continue // Skip this study if details fail
+		}
+		if details != nil {
+			detailedStudies = append(detailedStudies, details)
+		}
+	}
+
+	slog.InfoContext(ctx, "Successfully retrieved study list details", "count", len(detailedStudies))
+	c.JSON(http.StatusOK, detailedStudies) // Return the slice of detailed studies
 }

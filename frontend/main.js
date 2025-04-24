@@ -13,131 +13,409 @@ import * as dicomImageLoader from '@cornerstonejs/dicom-image-loader'; // Use na
 // Basic tools
 import {
     PanTool,
-    WindowLevelTool, // Might not apply to PNG but good to have
+    WindowLevelTool,
     ZoomTool,
-    // StackScrollMouseWheelTool, // For potential future multi-frame previews
     ToolGroupManager,
 } from '@cornerstonejs/tools';
 
-
 // --- Configuration ---
-//const API_BASE_URL = 'http://derp-gen-erics-backend.default.svc.cluster.local:80/api/v1'; // K8s Service URL
 const API_BASE_URL = '/api/v1'; // Use relative path via Ingress
 const studiesListElement = document.getElementById('studies-list');
 const renderingEngineId = 'myRenderingEngine'; // ID for the main rendering engine
 const toolGroupId = "STACK_TOOL_GROUP_ID"; // ID for our tool group
 
+// Initialize Cornerstone and DICOM tools
+// Fix for DICOM Image Loader initialization
 async function initializeCornerstone() {
-    console.log('>>> Checking Imported dicomImageLoader:', dicomImageLoader); // Good log
     console.log('Initializing Cornerstone Rendering...');
     await csRenderInit();
+    
     console.log('Initializing Cornerstone Tools...');
-    csToolsInit();
+    await csToolsInit();
 
-    // --- Initialize DICOM Image Loader & Workers ---
-    console.log('Initializing DICOM Image Loader...');
-    try {
-        // Configure the loader
-        dicomImageLoader.configure({
-            useWebWorkers: false, // temp change
-            decodeConfig: { convertFloatPixelDataToInt: false },
-        });
-        /*
-        // Log objects before worker init
-        console.log('dicomImageLoader object (before worker init):', dicomImageLoader);
-        console.log('dicomImageLoader.webWorkerManager (before worker init):', dicomImageLoader.webWorkerManager);
-
-        // Initialize workers
-        const workerConfig = {
-            maxWebWorkers: Math.max(navigator.hardwareConcurrency || 1, 1),
-            startWebWorkersOnDemand: true,
-            webWorkerPath: '/decodeImageFrameWorker.js', // Path in public/dist
-            taskConfiguration: { // Let's try putting taskConfig back now we fixed .external
-                decodeTask: {
-                    initializeCodecsOnStartup: false,
-                    usePDFJS: false,
-                    strict: false,
-                    codecPath: '/cornerstoneDICOMImageLoaderCodecs.js' // Path in public/dist/codecs maybe? Check actual path. Let's assume root for now.
-                },
-            },
-        };
-        dicomImageLoader.webWorkerManager.initialize(workerConfig);
-        console.log('DICOM Image Loader web workers initialization attempted.');
-        */
-    } catch (error) { // Correct variable name here
-        console.error('Error initializing DICOM Image Loader web workers:', error);
-        // Consider how fatal this error is - should we stop here?
+    // Initialize DICOM Image Loader - FIX: Use correct object structure
+    console.log('DICOM Image Loader structure:');
+    console.log(dicomImageLoader); // Log the entire object to debug its structure
+    
+    // Check if dicomImageLoader is properly loaded
+    if (!dicomImageLoader) {
+        console.error('dicomImageLoader is undefined or null');
+        return;
     }
-    // --- End DICOM Image Loader Worker Init ---
-
-
-    // --- Register the Loader with Cornerstone Core (MOVED HERE) ---
-    console.log('Registering DICOM image loaders with Cornerstone.');
+    
+    // Try different approaches to configure the loader based on the object structure
+    console.log('Configuring DICOM Image Loader...');
     try {
-        // Ensure necessary imports are at top: import * as cornerstone from '@cornerstonejs/core';
+        if (typeof dicomImageLoader.configure === 'function') {
+            // Direct configure method
+            dicomImageLoader.configure({
+                useWebWorkers: false,
+                decodeConfig: { convertFloatPixelDataToInt: false },
+            });
+            console.log('Successfully configured dicomImageLoader directly');
+        } else if (dicomImageLoader.wadouri && typeof dicomImageLoader.wadouri.configure === 'function') {
+            // Configure via wadouri
+            dicomImageLoader.wadouri.configure({
+                useWebWorkers: false,
+                decodeConfig: { convertFloatPixelDataToInt: false },
+            });
+            console.log('Successfully configured dicomImageLoader.wadouri');
+        } else {
+            console.warn('Could not find a valid configure method on dicomImageLoader. Will attempt to use default configuration.');
+        }
+    } catch (configError) {
+        console.error('Error during dicomImageLoader configuration:', configError);
+        // Continue anyway, may still work with default configuration
+    }
+
+    // Register the Loader with Cornerstone Core - use appropriate method based on structure
+    console.log('Registering DICOM image loaders with Cornerstone...');
+    try {
+        // Try wadouri.loadImage first if available
         if (dicomImageLoader.wadouri && typeof dicomImageLoader.wadouri.loadImage === 'function') {
             cornerstone.imageLoader.registerImageLoader('wadouri', dicomImageLoader.wadouri.loadImage);
-            console.log('Registered WADO-URI loader scheme.');
-        } else if (dicomImageLoader.loadImage && typeof dicomImageLoader.loadImage === 'function') {
-             cornerstone.imageLoader.registerImageLoader('wadouri', dicomImageLoader.loadImage);
-             console.log('Registered WADO-URI loader scheme (direct).');
-        } else {
-            console.error('Could not find suitable loadImage function on dicomImageLoader to register.');
+            console.log('Registered WADO-URI loader via dicomImageLoader.wadouri.loadImage');
+        } 
+        // Try main loadImage method if available
+        else if (typeof dicomImageLoader.loadImage === 'function') {
+            cornerstone.imageLoader.registerImageLoader('wadouri', dicomImageLoader.loadImage);
+            console.log('Registered WADO-URI loader via dicomImageLoader.loadImage');
         }
-    } catch (regError) { // Use a different variable name for clarity
+        // Try cornerstoneWADOImageLoader if it's globally available
+        else if (window.cornerstoneWADOImageLoader && typeof window.cornerstoneWADOImageLoader.wadouri.loadImage === 'function') {
+            cornerstone.imageLoader.registerImageLoader('wadouri', window.cornerstoneWADOImageLoader.wadouri.loadImage);
+            console.log('Registered WADO-URI loader via global cornerstoneWADOImageLoader');
+        }
+        else {
+            console.error('Could not find a suitable loadImage function. DICOM loading will not work.');
+            // Create a dummy loader for debugging that will log the attempt but fail gracefully
+            cornerstone.imageLoader.registerImageLoader('wadouri', function(imageId) {
+                console.error(`Attempted to load ${imageId} but no proper DICOM loader is configured.`);
+                return {
+                    promise: Promise.reject(new Error('No DICOM loader configured')),
+                    cancelFn: () => {}
+                };
+            });
+        }
+    } catch (regError) {
         console.error('Error during image loader registration:', regError);
     }
-    // --- End Loader Registration ---
 
-
-    // Add tools...
+    // Add tools
     console.log('Adding Cornerstone tools...');
-    try { // Add try/catch around tool setup too
+    try {
         cornerstoneTools.addTool(PanTool);
         cornerstoneTools.addTool(WindowLevelTool);
         cornerstoneTools.addTool(ZoomTool);
 
-        // Define tool group...
-        const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
-        if (!toolGroup) throw new Error('Failed to create tool group'); // Throw error if fails
+        // Define tool group
+        // If the toolGroup already exists, get a reference to it instead of creating a new one
+        let toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+        if (!toolGroup) {
+            console.log(`Creating new tool group with ID: ${toolGroupId}`);
+            toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
+            if (!toolGroup) throw new Error('Failed to create tool group');
 
-        toolGroup.addTool(PanTool.toolName);
-        toolGroup.addTool(WindowLevelTool.toolName);
-        toolGroup.addTool(ZoomTool.toolName);
+            // Only add tools if we're creating a new group
+            toolGroup.addTool(PanTool.toolName);
+            toolGroup.addTool(WindowLevelTool.toolName);
+            toolGroup.addTool(ZoomTool.toolName);
 
-        // Set tool bindings
-        toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 });
-        toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });
-        toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });
+            // Set tool bindings
+            toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 }); // Left click
+            toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });         // Middle click
+            toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });        // Right click
+        } else {
+            console.log(`Tool group ${toolGroupId} already exists, using existing group`);
+        }
 
         console.log('Cornerstone tools initialized and configured.');
     } catch (toolError) {
         console.error('Error setting up Cornerstone tools:', toolError);
     }
 
-    console.log('Cornerstone base initialization complete.'); // Renamed log
+    console.log('Cornerstone base initialization complete.');
 }
 
-// --- API Fetch Functions (Keep as before) ---
-async function fetchLocation(studyUID) { /* ... same as before ... */
+// Helper to safely disable a viewport before trying to recreate it
+async function safelyDisableViewport(renderingEngine, viewportId) {
+    if (!renderingEngine) return;
+    
     try {
-        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/location`);
-        if (!response.ok) { let errorMsg = `HTTP error! status: ${response.status}`; try { const errData = await response.json(); errorMsg = errData.error || errData.message || errorMsg; } catch(e) {} throw new Error(errorMsg); }
-        return await response.json();
-    } catch (error) { console.error(`Error fetching location for ${studyUID}:`, error); return { tier: 'error', locationType: `Error: ${error.message}` }; }
+        // Check if the viewport exists first
+        const viewport = renderingEngine.getViewport(viewportId);
+        if (viewport) {
+            console.log(`Disabling existing viewport: ${viewportId}`);
+            renderingEngine.disableElement(viewportId);
+        } else {
+            console.log(`Viewport ${viewportId} not found, no need to disable`);
+        }
+    } catch (error) {
+        // Ignore errors about non-existent viewports
+        if (error.message && error.message.includes('does not exist')) {
+            console.log(`Viewport ${viewportId} does not exist, no need to disable`);
+        } else {
+            console.warn(`Error while trying to disable viewport ${viewportId}:`, error);
+        }
+    }
 }
-async function moveStudy(studyUID, targetTier) { /* ... same as before ... */
-    console.log(`Requesting move for ${studyUID} to ${targetTier}`);
+
+// Function to safely create and initialize a viewport
+async function createViewport(element, viewportId) {
     try {
-        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetTier: targetTier }) });
-        if (!response.ok) { let errorMsg = `HTTP error! status: ${response.status}`; try { const errData = await response.json(); errorMsg = errData.error || errData.message || errorMsg; } catch (e) {} throw new Error(errorMsg); }
-        return await response.json();
-    } catch (error) { console.error(`Error moving study ${studyUID}:`, error); alert(`Failed to move study: ${error.message}`); return null; }
+        // Make sure rendering engine exists
+        const renderingEngine = await getRenderingEngine();
+        
+        // First try to safely disable any existing viewport with this ID
+        await safelyDisableViewport(renderingEngine, viewportId);
+        
+        // Set up the viewport configuration
+        const viewportInput = {
+            viewportId: viewportId,
+            element: element,
+            type: csEnums.ViewportType.STACK,
+        };
+        
+        // Create the viewport
+        console.log(`Enabling viewport ${viewportId}`);
+        renderingEngine.enableElement(viewportInput);
+        
+        // Get the tool group
+        const toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+        if (!toolGroup) {
+            throw new Error(`Tool group ${toolGroupId} not found. Has it been created?`);
+        }
+        
+        // Add viewport to tool group
+        console.log(`Adding viewport ${viewportId} to tool group ${toolGroupId}`);
+        toolGroup.addViewport(viewportId, renderingEngineId);
+        
+        // Return the viewport object
+        return renderingEngine.getViewport(viewportId);
+    } catch (error) {
+        console.error(`Error creating viewport ${viewportId}:`, error);
+        throw error; // Re-throw to allow calling code to handle specific errors
+    }
 }
-
-console.log('DICOM Image Loader and Web Workers initialized successfully (using updated paths).');
-
-// --- UI Rendering Functions ---
+// 3. Improved fetchStudyInstances with better error handling
+async function fetchStudyInstances(studyUID) {
+    console.log(`Fetching instances for study ${studyUID}`);
+    try {
+        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/instances`);
+        
+        // Handle HTTP errors with detailed logging
+        if (!response.ok) { 
+            let errorMsg = `HTTP error! status: ${response.status}`; 
+            let errorData = null;
+            
+            try { 
+                errorData = await response.json(); 
+                errorMsg = errorData.error || errorData.message || errorMsg; 
+            } catch(e) {
+                console.warn('Could not parse error response as JSON', e);
+            }
+            
+            // Special handling for 412 status (study not in hot tier)
+            if (response.status === 412) {
+                console.warn(`Study ${studyUID} is not in 'hot' tier, cannot fetch instances`);
+                return []; // Return empty array for not-hot studies
+            }
+            
+            console.error(`Failed to fetch instances for ${studyUID}:`, errorMsg, errorData);
+            throw new Error(errorMsg); 
+        }
+        
+        // Parse response
+        const instances = await response.json();
+        
+        // Validate response format
+        if (!Array.isArray(instances)) {
+            console.error(`Invalid response format for study ${studyUID} instances:`, instances);
+            throw new Error('Invalid response: expected an array of instances');
+        }
+        
+        console.log(`Successfully fetched ${instances.length} instances for study ${studyUID}`);
+        return instances;
+    } catch (error) { 
+        console.error(`Error in fetchStudyInstances for ${studyUID}:`, error); 
+        return []; // Return empty array on error
+    }
+}
+//
+// 2. Improved moveStudy function with better error and UI feedback
+async function moveStudy(studyUID, targetTier, edgeId) {
+    console.log(`Requesting move for ${studyUID} to ${targetTier}${edgeId ? ' at ' + edgeId : ''}`);
+    
+    // Get the study element to update UI
+    const studyElement = document.getElementById(`study-${studyUID}`);
+    let originalButtonText = 'Move Study';
+    let originalPreviewContent = '';
+    
+    // Update UI to show pending status
+    if (studyElement) {
+        const actionButton = studyElement.querySelector('.action-button');
+        const previewElement = studyElement.querySelector('.preview-area');
+        
+        if (actionButton) {
+            originalButtonText = actionButton.textContent;
+            actionButton.textContent = `Moving to ${targetTier}...`;
+            actionButton.disabled = true;
+        }
+        
+        if (previewElement) {
+            originalPreviewContent = previewElement.innerHTML;
+            previewElement.innerHTML = `
+                <div style="text-align: center;">
+                    <p>Processing move request...</p>
+                    <div class="loading-spinner" style="
+                        border: 4px solid #f3f3f3;
+                        border-top: 4px solid #3498db;
+                        border-radius: 50%;
+                        width: 24px;
+                        height: 24px;
+                        animation: spin 1s linear infinite;
+                        margin: 10px auto;
+                    "></div>
+                    <style>
+                        @keyframes spin {
+                            0% { transform: rotate(0deg); }
+                            100% { transform: rotate(360deg); }
+                        }
+                    </style>
+                </div>
+            `;
+        }
+    }
+    
+    try {
+        // Prepare request body
+        const requestBody = {
+            targetTier: targetTier,
+            targetLocation: edgeId || ''
+        };
+        
+        console.log(`Move request payload:`, requestBody);
+        
+        // Make API call
+        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/move`, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(requestBody) 
+        });
+        
+        // Handle HTTP errors with detailed logging
+        if (!response.ok) { 
+            let errorMsg = `HTTP error! status: ${response.status}`; 
+            let errorData = null;
+            
+            try { 
+                errorData = await response.json(); 
+                errorMsg = errorData.error || errorData.message || errorMsg; 
+            } catch (e) {
+                console.warn('Could not parse error response as JSON', e);
+            } 
+            
+            console.error(`Move request failed:`, errorMsg, errorData);
+            throw new Error(errorMsg); 
+        }
+        
+        // Parse response
+        const result = await response.json();
+        console.log('Move request successful:', result);
+        
+        // Refresh status and update UI after successful move
+        if (studyElement) {
+            const status = result.currentStatus || { tier: targetTier };
+            console.log(`Updating UI with new status:`, status);
+            
+            // Store current study data
+            const currentStudy = {
+                ID: studyUID,
+                LocationStatus: status,
+                // Preserve other properties if they exist in element data
+                PatientMainTags: studyElement._study?.PatientMainTags,
+                MainTags: studyElement._study?.MainTags,
+                SampleInstanceID: studyElement._study?.SampleInstanceID
+            };
+            
+            // Store updated study data in element
+            studyElement._study = currentStudy;
+            
+            // Update display with new status
+            updateStudyDisplay(currentStudy, studyElement);
+            
+            // Flash status to indicate successful update
+            const statusElement = studyElement.querySelector('.status-text');
+            if (statusElement) {
+                statusElement.classList.add('status-updated');
+                setTimeout(() => {
+                    statusElement.classList.remove('status-updated');
+                }, 3000);
+            }
+        }
+        
+        return result;
+    } catch (error) { 
+        console.error(`Error moving study ${studyUID}:`, error); 
+        
+        // Restore UI on error
+        if (studyElement) {
+            const actionButton = studyElement.querySelector('.action-button');
+            const previewElement = studyElement.querySelector('.preview-area');
+            
+            if (actionButton) {
+                actionButton.textContent = originalButtonText;
+                actionButton.disabled = false;
+            }
+            
+            if (previewElement) {
+                previewElement.innerHTML = `
+                    <div style="color: #ff6b6b; text-align: center;">
+                        <p>Move failed</p>
+                        <p style="font-size: 0.8em;">${error.message || 'Unknown error'}</p>
+                        <p style="margin-top: 10px;">
+                            <button id="retry-move-${studyUID}" style="padding: 5px 10px; cursor: pointer;">
+                                Retry
+                            </button>
+                        </p>
+                    </div>
+                `;
+                
+                // Add retry functionality
+                setTimeout(() => {
+                    const retryButton = document.getElementById(`retry-move-${studyUID}`);
+                    if (retryButton) {
+                        retryButton.onclick = () => moveStudy(studyUID, targetTier, edgeId);
+                    }
+                }, 0);
+                
+                // After 5 seconds, refresh status to ensure UI is up-to-date
+                setTimeout(() => {
+                    fetchLocation(studyUID).then(status => {
+                        if (status) {
+                            // Refresh study data
+                            const refreshedStudy = {
+                                ID: studyUID,
+                                LocationStatus: status,
+                                PatientMainTags: studyElement._study?.PatientMainTags,
+                                MainTags: studyElement._study?.MainTags,
+                                SampleInstanceID: studyElement._study?.SampleInstanceID
+                            };
+                            studyElement._study = refreshedStudy;
+                            updateStudyDisplay(refreshedStudy, studyElement);
+                        }
+                    }).catch(e => {
+                        console.error(`Failed to refresh status after move error:`, e);
+                    });
+                }, 5000);
+            }
+        }
+        
+        // Show alert for error
+        alert(`Failed to move study: ${error.message}`);
+        return null; 
+    }
+}
 
 // Helper to get or create rendering engine
 async function getRenderingEngine() {
@@ -149,7 +427,7 @@ async function getRenderingEngine() {
 }
 
 // Function to update a single study element based on status
-async function updateStudyDisplay(study, studyElement) {
+async function updateStudyDisplay(study, studyElement, toolGroup) {
     // Get the elements within this specific study card
     const statusElement = studyElement.querySelector('.status-text');
     const actionButton = studyElement.querySelector('.action-button');
@@ -160,15 +438,18 @@ async function updateStudyDisplay(study, studyElement) {
     const viewportId = `viewport-${study.ID}`; // Use Orthanc Study ID for uniqueness
 
     // Default state
-    statusElement.textContent = `Tier: ${study.LocationStatus.tier || 'N/A'}, Location: <span class="math-inline">\{study\.LocationStatus\.locationType \|\| 'N/A'\}</span>{study.LocationStatus.edgeId ? ' ('+study.LocationStatus.edgeId+')' : ''}`;
+    statusElement.textContent = `Tier: ${study.LocationStatus.tier || 'N/A'}, Location: ${study.LocationStatus.locationType || 'N/A'}${study.LocationStatus.edgeId ? ' ('+study.LocationStatus.edgeId+')' : ''}`;
     actionButton.textContent = 'Move Study'; // Or determine based on status
     actionButton.disabled = false;
     previewElement.textContent = ''; // Clear previous content
     previewElement.innerHTML = ''; // Clear any old img tags too
+    
     try {
-         // Attempt to disable element first in case it was previously enabled
-         renderingEngine.disableElement(viewportId);
-    } catch (e) { /* Ignore errors if element wasn't enabled */ }
+        // Attempt to disable element first in case it was previously enabled
+        renderingEngine.disableElement(viewportId);
+    } catch (e) { 
+        /* Ignore errors if element wasn't enabled */ 
+    }
 
     if (study.LocationStatus.tier === 'hot') {
         actionButton.textContent = 'Move to Cold';
@@ -178,25 +459,14 @@ async function updateStudyDisplay(study, studyElement) {
         try {
             previewElement.textContent = 'Loading DICOM...'; // Placeholder text
 
-            // --- IMPORTANT ASSUMPTION ---
-            // We need the Orthanc *Instance ID* of at least one instance
-            // from this study to fetch the file. Let's assume the data fetched
-            // from `/api/v1/studies` now includes a sample InstanceID per study,
-            // maybe like study.SampleInstanceID. You might need to adjust your
-            // backend /studies endpoint or fetch /instances separately first.
-            // If SampleInstanceID is missing, this will fail.
-            if (!study.SampleInstanceID) { // Adjust field name as needed
-               throw new Error('Sample Instance ID not available for study ' + study.ID);
+            // Check if we have a sample instance ID
+            if (!study.SampleInstanceID) {
+                throw new Error('Sample Instance ID not available for study ' + study.ID);
             }
-            // -----------------------------
 
-            // Construct the image ID using wadouri scheme pointing to *our* backend API endpoint
-            // window.location.origin gives http://pacs.local:8080 (or http://localhost:5173 in dev)
-            // API_BASE_URL is '/api/v1'
-            // We need study ID (Orthanc ID) and instance ID (Orthanc ID)
-            const imageId = `wadouri:<span class="math-inline">\{window\.location\.origin\}</span>{API_BASE_URL}/studies/<span class="math-inline">\{study\.ID\}/instances/</span>{study.SampleInstanceID}/file`;
+            // Construct the image ID using wadouri scheme
+            const imageId = `wadouri:${window.location.origin}${API_BASE_URL}/studies/${study.ID}/instances/${study.SampleInstanceID}/file`;
             console.log("Attempting to load imageId:", imageId);
-
 
             // Ensure the element exists and is ready
             previewElement.style.width = "256px"; // Set explicit size for viewport
@@ -212,25 +482,26 @@ async function updateStudyDisplay(study, studyElement) {
             // Enable the element *before* loading data into it
             renderingEngine.enableElement(viewportInput);
 
-            // Add the viewport to the tool group
-            toolGroup.addViewport(viewportId, renderingEngineId);
+            // Add the viewport to the tool group if toolGroup is available
+            if (toolGroup) {
+                toolGroup.addViewport(viewportId, renderingEngineId);
+            }
 
             // Get the viewport object
             const viewport = renderingEngine.getViewport(viewportId);
 
-            // Load the DICOM image via its ID - Cornerstone handles fetching via the loader
-            // Use setStack for STACK viewports
+            // Load the DICOM image via its ID
             await viewport.setStack([imageId], 0); // Set the stack with our single imageId
 
-            // Optionally set initial Window/Level or other properties
-            // viewport.setProperties({ voiRange: cs.utilities.windowLevel.getVOIFromDICOMPresets(image, 'CT-Bone') });
-            viewport.render(); // Render the loaded image
+            // Render the loaded image
+            viewport.render();
 
-            // Activate tools for this viewport
-            toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 }); // Left click
-            toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });       // Middle click
-            toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });      // Right click
-            // toolGroup.setToolActive(StackScrollMouseWheelTool.toolName); // If needed later
+            // Activate tools for this viewport if toolGroup is available
+            if (toolGroup) {
+                toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 }); // Left click
+                toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });       // Middle click
+                toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });      // Right click
+            }
 
             console.log(`Cornerstone DICOM loaded for ${viewportId}`);
 
@@ -238,7 +509,11 @@ async function updateStudyDisplay(study, studyElement) {
             console.error(`Error loading/displaying DICOM for study ${study.ID}:`, error);
             previewElement.textContent = `Error loading image: ${error.message}`;
             // Attempt to disable the element if loading failed
-             try { renderingEngine.disableElement(viewportId); } catch(e){ /* ignore */ }
+            try { 
+                renderingEngine.disableElement(viewportId); 
+            } catch(e) { 
+                /* ignore */ 
+            }
         }
         // --- End DICOM Loading ---
 
@@ -249,7 +524,7 @@ async function updateStudyDisplay(study, studyElement) {
     } else if (study.LocationStatus.tier === 'archive') {
         actionButton.textContent = 'Retrieve'; // Or Restore
         actionButton.onclick = () => moveStudy(study.ID, 'cold', ''); // Move to cold first? Or directly to hot? Define workflow.
-         previewElement.textContent = 'Status: Archive (Preview N/A)';
+        previewElement.textContent = 'Status: Archive (Preview N/A)';
     } else {
         actionButton.textContent = 'Unknown State';
         actionButton.disabled = true;
@@ -266,48 +541,60 @@ async function initializeApp() {
     }
     studiesListElement.innerHTML = '<p>Initializing Cornerstone...</p>';
 
-    // Initialize Cornerstone Engines and Tools FIRST
-    await initializeCornerstone();
-
-    // Now fetch the actual study data from the backend
-    studiesListElement.innerHTML = '<p>Loading studies from API...</p>';
-    fetchStudies(); // Trigger the data fetching and rendering process
+    // Store the toolGroup for later use
+    let toolGroup;
+    
+    try {
+        // Initialize Cornerstone Engines and Tools FIRST
+        toolGroup = await initializeCornerstone();
+        
+        // Now fetch the actual study data from the backend
+        studiesListElement.innerHTML = '<p>Loading studies from API...</p>';
+        fetchStudies(toolGroup); // Pass toolGroup to fetchStudies
+    } catch (error) {
+        console.error('Failed to initialize application:', error);
+        studiesListElement.innerHTML = `<p>Error initializing application: ${error.message}</p>`;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', initializeApp);
 
-// Keep track of studies globally or within component state if using React/Vue etc.
-let workspaceStudies = []; // Assuming a simple global array for now
-
 // Function to fetch studies and their first instance ID
-async function fetchStudies() {
+async function fetchStudies(toolGroup) {
     console.log('Fetching studies from backend...');
     let workspaceStudies = []; // Define locally or globally if needed elsewhere
     try {
-        // ... (fetch studies from /studies endpoint) ...
+        // Fetch studies from /studies endpoint
         const studiesResponse = await fetch(`${API_BASE_URL}/studies`);
         if (!studiesResponse.ok) throw new Error(`Studies fetch failed: ${studiesResponse.status}`);
         const studiesData = await studiesResponse.json();
         if (!Array.isArray(studiesData)) throw new Error('Invalid study data received');
 
-        // ... (enrich studies with SampleInstanceID using Promise.all as before) ...
-         const enrichedStudiesPromises = studiesData.map(async (study) => {
-             if (!study.ID) { /* ... handle missing ID ... */ return study; }
-             try {
-                 const instancesResponse = await fetch(`<span class="math-inline">\{API\_BASE\_URL\}/studies/</span>{study.ID}/instances`);
-                 if (instancesResponse.ok) {
-                     const instancesData = await instancesResponse.json();
-                     if (Array.isArray(instancesData) && instancesData.length > 0 && instancesData[0].ID) {
-                         study.SampleInstanceID = instancesData[0].ID; // Add first instance ID
-                     } else { study.SampleInstanceID = null; }
-                 } else { study.SampleInstanceID = null; }
-             } catch (instanceError) { study.SampleInstanceID = null; }
-             return study;
-         });
+        // Enrich studies with SampleInstanceID using Promise.all
+        const enrichedStudiesPromises = studiesData.map(async (study) => {
+            if (!study.ID) { return study; }
+            try {
+                const instancesResponse = await fetch(`${API_BASE_URL}/studies/${study.ID}/instances`);
+                if (instancesResponse.ok) {
+                    const instancesData = await instancesResponse.json();
+                    if (Array.isArray(instancesData) && instancesData.length > 0 && instancesData[0].ID) {
+                        study.SampleInstanceID = instancesData[0].ID; // Add first instance ID
+                    } else { 
+                        study.SampleInstanceID = null; 
+                    }
+                } else { 
+                    study.SampleInstanceID = null; 
+                }
+            } catch (instanceError) { 
+                study.SampleInstanceID = null; 
+            }
+            return study;
+        });
+        
         workspaceStudies = await Promise.all(enrichedStudiesPromises);
 
-        // --- CALL SEPARATE RENDER FUNCTION ---
-        renderUI(workspaceStudies); // Pass enriched studies to render function
+        // Render the UI with the toolGroup
+        renderUI(workspaceStudies, toolGroup); 
 
     } catch (error) {
         console.error('Failed to fetch or process studies:', error);
@@ -316,8 +603,9 @@ async function fetchStudies() {
         }
     }
 }
-// NEW Function to render the list of study items
-function renderUI(studiesToRender) {
+
+// Function to render the list of study items
+function renderUI(studiesToRender, toolGroup) {
     if (!studiesListElement) return;
     studiesListElement.innerHTML = ''; // Clear loading message
 
@@ -334,27 +622,28 @@ function renderUI(studiesToRender) {
             study.LocationStatus = status || { tier: 'unknown', locationType: 'error' }; // Add status to study object
             const studyElement = renderStudyItem(study); // Create element with study data
             studiesListElement.appendChild(studyElement);
-            updateStudyDisplay(study, studyElement); // Update display based on status (fetches location again - slightly redundant but ok)
+            updateStudyDisplay(study, studyElement, toolGroup); // Pass toolGroup to updateStudyDisplay
         }).catch(error => {
-             console.error(`Failed to get initial location for study ${study.ID}:`, error);
-             study.LocationStatus = { tier: 'unknown', locationType: 'error' };
-             const studyElement = renderStudyItem(study); // Still render item, show error status
-             studiesListElement.appendChild(studyElement);
-             updateStudyDisplay(study, studyElement);
+            console.error(`Failed to get initial location for study ${study.ID}:`, error);
+            study.LocationStatus = { tier: 'unknown', locationType: 'error' };
+            const studyElement = renderStudyItem(study); // Still render item, show error status
+            studiesListElement.appendChild(studyElement);
+            updateStudyDisplay(study, studyElement, toolGroup); // Pass toolGroup to updateStudyDisplay
         });
     });
 }
+
 function renderStudyItem(study) { // Receives enriched study object
     const item = document.createElement('div');
     item.className = 'study-item';
     item.id = `study-${study.ID}`; // Use Orthanc Study ID
 
     const title = document.createElement('h3');
-    title.textContent = `Patient: <span class="math-inline">\{study\.PatientMainTags?\.PatientName \|\| 'N/A'\} \(</span>{study.PatientMainTags?.PatientID || 'N/A'})`;
+    title.textContent = `Patient: ${study.PatientMainTags?.PatientName || 'N/A'} (${study.PatientMainTags?.PatientID || 'N/A'})`;
     item.appendChild(title);
 
     const studyInfo = document.createElement('p');
-    studyInfo.textContent = `Study: <span class="math-inline">\{study\.MainTags?\.StudyDescription \|\| 'N/A'\} \(</span>{study.MainTags?.StudyDate || 'N/A'})`;
+    studyInfo.textContent = `Study: ${study.MainTags?.StudyDescription || 'N/A'} (${study.MainTags?.StudyDate || 'N/A'})`;
     item.appendChild(studyInfo);
 
     // Placeholder for status text
@@ -384,3 +673,81 @@ function renderStudyItem(study) { // Receives enriched study object
 
     return item;
 }
+// 1. Improved fetchLocation function
+async function fetchLocation(studyUID) {
+    console.log(`Fetching location for study ${studyUID}`);
+    try {
+        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/location`);
+        
+        // Handle HTTP errors with detailed logging
+        if (!response.ok) { 
+            let errorMsg = `HTTP error! status: ${response.status}`; 
+            let errorData = null;
+            
+            try { 
+                errorData = await response.json(); 
+                errorMsg = errorData.error || errorData.message || errorMsg; 
+            } catch(e) {
+                console.warn('Could not parse error response as JSON', e);
+            }
+            
+            console.error(`Failed to fetch location for ${studyUID}:`, errorMsg, errorData);
+            throw new Error(errorMsg); 
+        }
+        
+        const locationData = await response.json();
+        console.log(`Successfully fetched location for study ${studyUID}:`, locationData);
+        return locationData;
+    } catch (error) { 
+        console.error(`Error in fetchLocation for ${studyUID}:`, error); 
+        return { tier: 'error', locationType: `Error: ${error.message}` }; 
+    }
+}
+// 4. Function to refresh all study data
+async function refreshAllStudies() {
+    const studiesContainer = document.getElementById('studies-list');
+    if (!studiesContainer) return;
+    
+    // Show loading indicator
+    studiesContainer.innerHTML = '<p>Refreshing studies...</p>';
+    
+    try {
+        await fetchStudies();
+        console.log('All studies refreshed successfully');
+    } catch (error) {
+        console.error('Error refreshing studies:', error);
+        studiesContainer.innerHTML = `
+            <p style="color: #ff6b6b;">Error refreshing studies: ${error.message}</p>
+            <button id="retry-refresh" style="margin-top: 10px; padding: 5px 10px;">Retry</button>
+        `;
+        
+        // Add retry functionality
+        const retryButton = document.getElementById('retry-refresh');
+        if (retryButton) {
+            retryButton.onclick = refreshAllStudies;
+        }
+    }
+}
+
+// 5. Add a refresh button to the UI
+function addRefreshButton() {
+    const header = document.querySelector('h1');
+    if (!header) return;
+    
+    const refreshButton = document.createElement('button');
+    refreshButton.textContent = 'Refresh All';
+    refreshButton.id = 'refresh-all-button';
+    refreshButton.style.marginLeft = '15px';
+    refreshButton.style.padding = '5px 15px';
+    refreshButton.style.fontSize = '14px';
+    refreshButton.style.cursor = 'pointer';
+    refreshButton.onclick = refreshAllStudies;
+    
+    header.appendChild(refreshButton);
+}
+
+// Add refresh button when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    addRefreshButton();
+    // Initialize other UI elements...
+});
