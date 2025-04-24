@@ -1,158 +1,96 @@
 # gen-erics
 
-- g go
-- e engine
-- n network for
-- e edge
-- r retrieval
-- i interface and
-- c cloud
-- s storage
+## Overview
 
-## project layout
+**g**-go
+**e**-engine
+**n**-network for
+**e**-edge
+**r**-retrieval
+**i**-interface and
+**c**-cloud
+**s**-storage
+
+Gen-erics is a cloud/edge DICOM image management system for medical imaging. It provides an API for intelligent tier-based storage management of DICOM studies, with a web-based viewing interface.
+
+## Project Layout
 
 ```
 gen-erics/
 ├── .github/
-│   └── workflows/
-│       ├── build-deploy-dev.yaml    # GitHub Action for dev environment
-│       └── build-deploy-prod.yaml   # GitHub Action for prod environments (future)
+│   └── workflows/                      # GitHub CI/CD workflows
+│       ├── build-deploy-dev.yaml
+│       └── build-deploy-prod.yaml
 │
-├── backend/                     # Go Gin application (API, business logic)
-│   ├── cmd/server/              # Main application package
+├── backend/                            # Go Gin API server
+│   ├── cmd/server/                     # Main application entry point
 │   │   └── main.go
-│   ├── internal/                # Private application code
-│   │   ├── api/                 # Gin handlers and routing
+│   ├── internal/                       # Private application code
+│   │   ├── api/                        # API handlers and routing
 │   │   │   ├── handlers.go
 │   │   │   └── routes.go
-│   │   ├── config/              # Configuration loading
+│   │   ├── config/                     # Configuration
 │   │   │   └── config.go
-│   │   └── orthanc/             # Client for Orthanc API
-│   │       └── client.go
-│   │   # Add other internal packages (e.g., fhir, auth) later
-│   ├── go.mod                   # Go module definition
-│   ├── go.sum                   # Dependency checksums
-│   └── Dockerfile               # Multi-stage Dockerfile for Go backend
+│   │   ├── models/                     # Shared data models
+│   │   │   └── types.go
+│   │   ├── orthanc/                    # Orthanc REST client
+│   │   │   ├── client.go
+│   │   │   └── types.go
+│   │   └── storage/                    # Storage layer (PostgreSQL)
+│   │       └── postgres.go
+│   ├── go.mod                          # Go module definition
+│   ├── go.sum                          # Dependency checksums
+│   └── Dockerfile                      # Multi-stage Dockerfile for Go backend
 │
-├── frontend/                    # JavaScript DICOM Viewer (e.g., based on Cyclops) (unsure of this)
-|   ├── index.html     # The main page structure
-|   ├── style.css      # Basic styling
-|   |── app.js         # JavaScript logic for API calls and UI updates
-│   ├── src/
-│   ├── public/
-│   ├── package.json
-│   └── Dockerfile               # For serving the frontend app
+├── frontend/                           # DICOM Viewer web interface
+│   ├── index.html                      # Main HTML page
+│   ├── main.js                         # Core application logic
+│   ├── style.css                       # Styling
+│   ├── vite.config.js                  # Vite build configuration
+│   ├── package.json                    # NPM dependencies
+│   └── Dockerfile                      # Frontend container build
 │
-├── infrastructure/
-│   ├── helm/
-│   │   ├── pacs-app/            # Helm chart for the entire application stack
-│   │   │   ├── Chart.yaml
-│   │   │   ├── values.yaml
-│   │   │   ├── templates/
-│   │   │   │   ├── backend-deployment.yaml
-│   │   │   │   ├── backend-service.yaml
-│   │   │   │   ├── frontend-deployment.yaml
-│   │   │   │   ├── frontend-service.yaml
-│   │   │   │   ├── orthanc-statefulset.yaml # Or Deployment
-│   │   │   │   ├── orthanc-service.yaml
-│   │   │   │   ├── orthanc-configmap.yaml # Orthanc configuration
-│   │   │   │   └── ingress.yaml         # (Optional) Kubernetes Ingress
-│   │   │   └── ... (other helper templates)
-│   │   └── ... (potentially subcharts for orthanc, backend, etc.)
+├── infrastructure/                     # Deployment configurations
+│   ├── helm/                           # Helm charts
+│   │   └── gen-erics/                  # Main application chart
+│   │       ├── Chart.yaml
+│   │       ├── values.yaml
+│   │       ├── Chart.lock
+│   │       ├── templates/              # Kubernetes manifests
+│   │       │   ├── _helpers.tpl
+│   │       │   ├── NOTES.txt
+│   │       │   ├── backend-deployment.yaml
+│   │       │   ├── backend-service.yaml
+│   │       │   ├── frontend-deployment.yaml
+│   │       │   ├── frontend-service.yaml
+│   │       │   ├── orthanc-configmap.yaml
+│   │       │   ├── orthanc-statefulset.yaml
+│   │       │   ├── orthanc-services.yaml
+│   │       │   └── tests/
+│   │       │       └── test-connection.yaml
+│   │       └── .helmignore
 │   │
-│   └── orthanc/                 # Orthanc specific configurations, plugins
-│       └── orthanc.json         # Base Orthanc configuration file (used for Helm chart)
+│   └── orthanc/                        # Orthanc configuration
+│       └── orthanc.json                # Base Orthanc configuration
 │
-├── docs/                        # Project documentation
-│   ├── architecture.md
-│   └── setup.md
-│
-└── README.md                    # Project overview, setup instructions
+├── skaffold.yaml                       # Skaffold development config
+└── README.md                           # This file
 ```
 
+## Development Environment Setup
 
-## update go modules
+### Prerequisites
 
-Navigate to the backend dir. Run:
+1. [Docker](https://docs.docker.com/get-docker/) or [Rancher Desktop](https://rancherdesktop.io/)
+2. [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+3. [k3d](https://k3d.io/) for local Kubernetes 
+4. [Helm](https://helm.sh/docs/intro/install/)
+5. [Skaffold](https://skaffold.dev/docs/install/)
 
-```bash
-go mod tidy
-```
-
-## GitHub Container Registry
-
-```bash
-# get ready to push images
-export CR_PAT=<github token classic>
-echo $CR_PAT | docker login ghcr.io -u <user>> --password-stdin
-
-# create an image tag
-
-docker build -t ghcr.io/ewag/gen-erics:k3d-test-0.1
-docker push ghcr.io/ewag/gen-erics:k3d-test-0.1
-```
-
-## K8s pull secret
+### Setting up the k3d Cluster
 
 ```bash
-# Replace placeholders below!
-export K8S_NAMESPACE="pacs-dev" # Or your target namespace
-export GITHUB_USERNAME="YOUR_GITHUB_USERNAME" # Your GitHub username
-export GITHUB_PAT="YOUR_GENERATED_PAT" # The PAT you just created
-export SECRET_NAME="ghcr-pull-secret" # Name for your k8s secret
-
-kubectl create secret docker-registry $SECRET_NAME \
-  --namespace $K8S_NAMESPACE \
-  --docker-server=ghcr.io \
-  --docker-username=$GITHUB_USERNAME \
-  --docker-password=$GITHUB_PAT \
-  --docker-email=your.email@example.com # Email is usually required but can be anything valid
-```
-
-## Add some demo dicom images for testing
-
-I grabbed these [7 test cases](https://www.visus.com/en/downloads/jivex-dicom-viewer.html) and put them in the test_dicom folder.
-
-## testing the locations with the mocks
-
-```bash
-curl http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/location
-curl http://localhost:8080/api/v1/studies/STUDY_UID_2_COLD/location
-curl -X POST -H "Content-Type: application/json" -d '{"targetTier": "warm"}' http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/move
-curl http://localhost:8080/api/v1/studies/STUDY_UID_1_HOT/location
-
-```
-
-# Setting up frontend
-```bash
-# Make sure you have Node.js and npm installed (https://nodejs.org/)
-# Navigate OUTSIDE the frontend directory first if needed
-# cd ..
-
-# Create a new vanilla JS project with Vite INSIDE the frontend directory
-# (Choose 'vanilla' and then 'javascript' when prompted)
-npm create vite@latest frontend -- --template vanilla
-
-# Navigate into the new frontend directory
-cd frontend
-
-# Install necessary Cornerstone libraries and dicom-parser (needed by loaders)
-npm install @cornerstonejs/core @cornerstonejs/tools @cornerstonejs/streaming-image-volume-loader dicom-parser
-
-# Install dev dependencies (optional but helpful)
-npm install --save-dev vite
-
-# Clean up default Vite files if needed (like counter.js, javascript.svg)
-# Keep main.js, style.css, index.html
-```
-
-# Testing and setting up in a dev environment. 
-
-Here we ae trying to setup a dev environment where I can look at logs, and iterate on the go code. This was a little annoying to setup well, so I hope it works going forward. This local dev setup is not meant to be used in production, but hopefully, because of this work, logging and OTEL in production will be easier.
-
-## k3d cluster setup
-
-```bash
+# Create a k3d cluster with port mappings
 k3d cluster create dev-cluster \
   --agents 1 \
   --port '8080:80@loadbalancer' \
@@ -160,23 +98,27 @@ k3d cluster create dev-cluster \
   --wait
 ```
 
-## notes:
-
-k3d cluster create dev-cluster: Creates a new cluster named dev-cluster.
-- --agents 1: Adds one worker node (good practice).
-- --port '8080:80@loadbalancer': Maps port 8080 on your Mac (localhost:8080) to port 80 on k3d's internal service load balancer (which fronts Traefik). This handles HTTP traffic.
-- --port '8443:443@loadbalancer': Maps port 8443 on your Mac (localhost:8443) to port 443 on k3d's internal service load balancer. This handles HTTPS traffic.
-- --wait: Waits for the cluster nodes to be ready.
-
-## installing gen-erics
+### Setting up GitHub Container Registry Access
 
 ```bash
-helm install dev infrastructure/helm/gen-erics
+# Create a secret for pulling images from GitHub Container Registry
+export K8S_NAMESPACE="default" # Or your target namespace
+export GITHUB_USERNAME="YOUR_GITHUB_USERNAME" 
+export GITHUB_PAT="YOUR_GENERATED_PAT" # Personal Access Token with package read rights
+export SECRET_NAME="ghcr-pull-secret"
+
+kubectl create secret docker-registry $SECRET_NAME \
+  --namespace $K8S_NAMESPACE \
+  --docker-server=ghcr.io \
+  --docker-username=$GITHUB_USERNAME \
+  --docker-password=$GITHUB_PAT \
+  --docker-email=your.email@example.com
 ```
 
-## install signox (monitoring, logging, otel)
+### Setting up Observability with SigNoz
 
 ```bash
+# Install SigNoz for observability
 helm install signoz signoz/signoz \
   --namespace observability \
   --create-namespace \
@@ -185,5 +127,99 @@ helm install signoz signoz/signoz \
   --set frontend.ingress.ingressClassName=traefik \
   --set global.storageClass=local-path \
   --wait
-  ```
+```
 
+### Development with Skaffold
+
+Skaffold automates the build-test-deploy workflow for local development:
+
+1. **Initialize local environment**:
+   
+   First, verify your k3d cluster is running:
+   ```bash
+   kubectl cluster-info
+   ```
+
+2. **Configure Skaffold values file** (if not already done):
+   
+   Create a file at `infrastructure/gen-erics-values.yaml` with any overrides for the Helm chart.
+
+3. **Development Mode**:
+   
+   Start Skaffold in development mode, which will:
+   - Build the backend and frontend containers
+   - Deploy the Helm chart with those images
+   - Watch for file changes and automatically rebuild/redeploy
+
+   ```bash
+   skaffold dev
+   ```
+
+   This will:
+   - Build the Docker images for backend and frontend
+   - Deploy using Helm with your custom values
+   - Stream logs from all pods to your console
+   - Watch for file changes and automatically rebuild/redeploy
+
+4. **One-time Build & Deploy**:
+
+   If you just want to build and deploy once without watching for changes:
+   ```bash
+   skaffold run
+   ```
+
+5. **Accessing the Application**:
+
+   Once deployed, access the application at:
+   - Frontend: http://localhost:8080/
+   - API: http://localhost:8080/api/v1/
+   - SigNoz: http://signoz.local/ (requires /etc/hosts entry)
+
+### Working on the Frontend
+
+To initialize the frontend dependencies:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+This will start a development server on http://localhost:5173/ with hot reloading.
+
+### Working on the Backend
+
+For backend development, you can use Go's native tools:
+
+```bash
+cd backend
+go mod tidy
+go run cmd/server/main.go
+```
+
+## Key Features
+
+- **Tier-based Storage Management**: Move DICOM studies between hot, cold, and archive tiers
+- **Integrated DICOM Viewer**: CornerstoneJS-based viewer for DICOM images
+- **RESTful API**: API for managing DICOM studies and instances
+- **Observability**: OpenTelemetry-based tracing, metrics, and logging
+
+## API Endpoints
+
+- `GET /api/v1/studies`: List all studies
+- `GET /api/v1/studies/{studyUID}/location`: Get current storage location of a study
+- `POST /api/v1/studies/{studyUID}/move`: Move a study to a different storage tier
+- `GET /api/v1/studies/{studyUID}/instances`: List instances in a study
+- `GET /api/v1/studies/{studyUID}/instances/{instanceUID}/file`: Get DICOM file
+- `GET /api/v1/studies/{studyUID}/instances/{instanceUID}/preview`: Get image preview
+
+## Database Schema
+
+The application uses PostgreSQL to track study storage locations with a simple schema:
+
+- `study_status` table:
+  - `study_instance_uid` (primary key): DICOM Study Instance UID
+  - `tier`: Current storage tier (hot, cold, archive)
+  - `location_type`: Storage location type (edge, cloud)
+  - `edge_id`: Specific edge device ID (if applicable)
+  - `last_updated`: Timestamp of last update
