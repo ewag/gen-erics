@@ -1,76 +1,102 @@
 // File: frontend/main.js
-import './style.css'; // Import CSS (Vite handles this)
-
-// Import Cornerstone Core and Tools
 import * as cornerstone from '@cornerstonejs/core';
 import * as cornerstoneTools from '@cornerstonejs/tools';
-import { RenderingEngine, Enums as csEnums } from '@cornerstonejs/core';
-import { init as csRenderInit } from '@cornerstonejs/core';
-import { init as csToolsInit } from '@cornerstonejs/tools';
-import dicomParser from 'dicom-parser';
-import * as dicomImageLoader from '@cornerstonejs/dicom-image-loader'; // Use namespace import
 
-// Basic tools
+// Import specific classes and constants
+import { 
+    RenderingEngine, 
+    Enums 
+} from '@cornerstonejs/core';
+
 import {
     PanTool,
-    WindowLevelTool, // Might not apply to PNG but good to have
+    WindowLevelTool,
     ZoomTool,
-    // StackScrollMouseWheelTool, // For potential future multi-frame previews
     ToolGroupManager,
 } from '@cornerstonejs/tools';
 
+// Import DICOM parser and DICOM Image Loader
+import dicomParser from 'dicom-parser';
+import * as cornerstoneDICOMImageLoader from '@cornerstonejs/dicom-image-loader';
+
 // --- Configuration ---
-//const API_BASE_URL = 'http://derp-gen-erics-backend.default.svc.cluster.local:80/api/v1'; // K8s Service URL
-const API_BASE_URL = '/api/v1'; // Use relative path via Ingress
+const API_BASE_URL = '/api/v1';
 const studiesListElement = document.getElementById('studies-list');
-const renderingEngineId = 'myRenderingEngine'; // ID for the main rendering engine
-const toolGroupId = "STACK_TOOL_GROUP_ID"; // ID for our tool group
+const renderingEngineId = 'myRenderingEngine';
+const toolGroupId = "STACK_TOOL_GROUP_ID";
 
+// Helper to check if a byteArray is a valid DICOM file
+function isValidDicom(byteArray) {
+    // Check for DICOM magic number (DICM) at offset 128
+    if (byteArray.length <= 132) return false;
+    
+    // Check for the DICM prefix at offset 128
+    return (
+        byteArray[128] === 68 && // D
+        byteArray[129] === 73 && // I
+        byteArray[130] === 67 && // C
+        byteArray[131] === 77    // M
+    );
+}
+
+// Simplified initialization that focuses on just making it work
 async function initializeCornerstone() {
-    console.log('Initializing Cornerstone...');
-
     try {
-        // Initialize Cornerstone core
-        await csRenderInit();
+        console.log('Initializing Cornerstone...');
         
-        // Initialize Cornerstone tools
-        await csToolsInit();
-    
-        // Configure DICOM image loader
-        dicomImageLoader.configure({
-            useWebWorkers: false, // Disable web workers for simplicity
-            decodeConfig: { convertFloatPixelDataToInt: false },
-        });
-    
-        // Register DICOM image loader with Cornerstone
-        if (dicomImageLoader.wadouri && typeof dicomImageLoader.wadouri.loadImage === 'function') {
-            cornerstone.imageLoader.registerImageLoader('wadouri', dicomImageLoader.wadouri.loadImage);
-            console.log('Registered WADO-URI loader scheme.');
-        } else if (dicomImageLoader.loadImage && typeof dicomImageLoader.loadImage === 'function') {
-             cornerstone.imageLoader.registerImageLoader('wadouri', dicomImageLoader.loadImage);
-             console.log('Registered WADO-URI loader scheme (direct).');
-        } else {
-            console.error('Could not find suitable loadImage function on dicomImageLoader to register.');
+        // Initialize Core first
+        await cornerstone.init();
+        console.log('Cornerstone Core initialized.');
+        
+        // Initialize Tools second
+        await cornerstoneTools.init();
+        console.log('Cornerstone Tools initialized.');
+        
+        console.log('DICOM Image Loader imported.');
+        
+        // Register the external dependencies required by cornerstoneDICOMImageLoader
+        if (cornerstoneDICOMImageLoader.external) {
+            cornerstoneDICOMImageLoader.external.cornerstone = cornerstone;
+            cornerstoneDICOMImageLoader.external.dicomParser = dicomParser;
         }
-    
-        // Add tools and set up tool group
+        
+        // Try to set default settings to be more forgiving of malformed DICOM files
+        if (cornerstoneDICOMImageLoader.wadouri) {
+            // Try to set options for more forgiving parsing
+            if (typeof cornerstoneDICOMImageLoader.wadouri.dataSetCacheManager?.setOptions === 'function') {
+                cornerstoneDICOMImageLoader.wadouri.dataSetCacheManager.setOptions({
+                    strict: false,  // Don't be strict about DICOM conformance
+                });
+            }
+        }
+        
+        // Register the WADO-URI image loader
+        if (cornerstoneDICOMImageLoader.wadouri && 
+            typeof cornerstoneDICOMImageLoader.wadouri.loadImage === 'function') {
+            cornerstone.imageLoader.registerImageLoader('wadouri', 
+                cornerstoneDICOMImageLoader.wadouri.loadImage);
+            console.log('WADO-URI loader registered.');
+        }
+        
+        // Add tools
         cornerstoneTools.addTool(PanTool);
         cornerstoneTools.addTool(WindowLevelTool);
         cornerstoneTools.addTool(ZoomTool);
-    
-        // Create a tool group for all viewports
+        
+        // Create tool group
         const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
-        if (!toolGroup) throw new Error('Failed to create tool group');
-    
-        toolGroup.addTool(PanTool.toolName);
-        toolGroup.addTool(WindowLevelTool.toolName);
-        toolGroup.addTool(ZoomTool.toolName);
-    
-        // Set default tool interactions
-        toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 }); // Left click
-        toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });       // Middle click
-        toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });      // Right click
-    
+        if (toolGroup) {
+            // Add tools to the group
+            toolGroup.addTool(PanTool.toolName);
+            toolGroup.addTool(WindowLevelTool.toolName);
+            toolGroup.addTool(ZoomTool.toolName);
+            
+            // Set tool modes
+            toolGroup.setToolActive(WindowLevelTool.toolName, { mouseButtonMask: 1 });
+            toolGroup.setToolActive(PanTool.toolName, { mouseButtonMask: 4 });
+            toolGroup.setToolActive(ZoomTool.toolName, { mouseButtonMask: 2 });
+        }
+        
         console.log('Cornerstone initialization complete.');
         return true;
     } catch (error) {
@@ -79,26 +105,12 @@ async function initializeCornerstone() {
     }
 }
 
-// Helper to get or create the rendering engine
-async function getRenderingEngine() {
-    let renderingEngine = cornerstone.getRenderingEngine(renderingEngineId);
-    if (!renderingEngine) {
-        renderingEngine = new RenderingEngine(renderingEngineId);
-    }
-    return renderingEngine;
-}
-
 // --- API Fetch Functions ---
 async function fetchLocation(studyUID) {
     try {
         const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/location`);
         if (!response.ok) { 
-            let errorMsg = `HTTP error! status: ${response.status}`; 
-            try { 
-                const errData = await response.json(); 
-                errorMsg = errData.error || errData.message || errorMsg; 
-            } catch(e) {} 
-            throw new Error(errorMsg); 
+            throw new Error(`HTTP error! status: ${response.status}`); 
         }
         return await response.json();
     } catch (error) { 
@@ -108,12 +120,12 @@ async function fetchLocation(studyUID) {
 }
 
 async function moveStudy(studyUID, targetTier, targetLocation = '') {
-    console.log(`Requesting move for ${studyUID} to ${targetTier} ${targetLocation ? 'at ' + targetLocation : ''}`);
+    console.log(`Requesting move for ${studyUID} to ${targetTier}`);
     try {
-        const moveData = { targetTier: targetTier };
-        if (targetLocation) {
-            moveData.targetLocation = targetLocation;
-        }
+        const moveData = { 
+            targetTier: targetTier,
+            targetLocation: targetLocation
+        };
         
         const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/move`, { 
             method: 'POST', 
@@ -122,12 +134,7 @@ async function moveStudy(studyUID, targetTier, targetLocation = '') {
         });
         
         if (!response.ok) { 
-            let errorMsg = `HTTP error! status: ${response.status}`; 
-            try { 
-                const errData = await response.json(); 
-                errorMsg = errData.error || errData.message || errorMsg; 
-            } catch (e) {} 
-            throw new Error(errorMsg); 
+            throw new Error(`HTTP error! status: ${response.status}`); 
         }
         
         const result = await response.json();
@@ -140,133 +147,208 @@ async function moveStudy(studyUID, targetTier, targetLocation = '') {
     }
 }
 
+// Fetch preview image instead of trying to load full DICOM
+async function fetchInstancePreview(studyUID, instanceUID) {
+    try {
+        // Use preview endpoint instead of file endpoint
+        const response = await fetch(`${API_BASE_URL}/studies/${studyUID}/instances/${instanceUID}/preview`);
+        
+        // Special handling for 412 Precondition Failed (study not in hot tier)
+        if (response.status === 412) {
+            console.log(`Preview not available for instance ${instanceUID} due to tier status`);
+            return { error: 'tier', message: 'Preview not available for this tier' };
+        }
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        // Get blob from response
+        const imageBlob = await response.blob();
+        
+        // Create object URL for the image
+        return { url: URL.createObjectURL(imageBlob) };
+    } catch (error) {
+        console.error(`Error fetching preview for instance ${instanceUID}:`, error);
+        return { error: 'general', message: error.message };
+    }
+}
+
+// Global rendering engine reference to avoid recreation
+let globalRenderingEngine = null;
+
+// Get or create a rendering engine - simplified to use global reference
+async function getRenderingEngine() {
+    if (!globalRenderingEngine) {
+        try {
+            globalRenderingEngine = new RenderingEngine(renderingEngineId);
+        } catch (error) {
+            console.error('Error creating rendering engine:', error);
+            return null;
+        }
+    }
+    return globalRenderingEngine;
+}
+
 // Function to update a single study element based on status
 async function updateStudyDisplay(study, studyElement) {
     // Get the elements within this specific study card
     const statusElement = studyElement.querySelector('.status-text');
     const actionButton = studyElement.querySelector('.action-button');
-    const previewElement = studyElement.querySelector('.preview-area');
+    const previewElement = studyElement.querySelector('.preview-area'); // The div for cornerstone
 
     // Make sure cornerstone rendering engine is available
-    const renderingEngine = await getRenderingEngine();
+    const renderingEngine = await getRenderingEngine(); // Use await here
+    if (!renderingEngine) {
+        previewElement.textContent = 'Error: Could not initialize rendering engine';
+        return;
+    }
+    
     const viewportId = `viewport-${study.ID}`; // Use Orthanc Study ID for uniqueness
 
-    // Default state - set initial status display
+    // Default state
     statusElement.textContent = `Tier: ${study.LocationStatus.tier || 'N/A'}, Location: ${study.LocationStatus.locationType || 'N/A'}${study.LocationStatus.edgeId ? ' ('+study.LocationStatus.edgeId+')' : ''}`;
+    statusElement.className = `status-text status ${study.LocationStatus.tier || 'unknown'}`;
     
-    // Clear previous content
-    previewElement.textContent = ''; 
-    previewElement.innerHTML = '';
+    actionButton.textContent = 'Move Study'; // Or determine based on status
+    actionButton.disabled = false;
+    previewElement.textContent = ''; // Clear previous content
+    previewElement.innerHTML = ''; // Clear any old img tags too
     
     try {
-        // Try to disable element if it was previously enabled
+        // Attempt to disable element first in case it was previously enabled
         renderingEngine.disableElement(viewportId);
     } catch (e) { /* Ignore errors if element wasn't enabled */ }
 
-    // Configure button and preview based on tier status
     if (study.LocationStatus.tier === 'hot') {
-        // Hot tier - can view images, offer to move to cold
         actionButton.textContent = 'Move to Cold';
-        actionButton.className = 'action-button hot';
-        actionButton.disabled = false;
-        actionButton.onclick = () => moveStudy(study.ID, 'cold').then(() => {
-            // After move, refresh the study status
-            fetchLocation(study.ID).then(status => {
-                study.LocationStatus = status;
-                updateStudyDisplay(study, studyElement);
-            });
-        });
+        actionButton.onclick = () => moveStudy(study.ID, 'cold', ''); // Use Orthanc ID
 
-        // --- Load DICOM Preview ---
+        // --- Load DICOM using Cornerstone with fallback ---
+        if (!study.SampleInstanceID) {
+            previewElement.textContent = 'No instance available for this study';
+            return;
+        }
+
+        // Show loading state
+        previewElement.textContent = 'Loading DICOM...';
+        previewElement.style.width = "256px";
+        previewElement.style.height = "256px";
+        
         try {
-            previewElement.textContent = 'Loading DICOM...';
-
-            // Check if we have an instance ID to load
-            if (!study.SampleInstanceID) {
-                throw new Error('No instance available for preview');
+            // Try to use a simple image approach first
+            const preview = await fetchInstancePreview(study.ID, study.SampleInstanceID);
+            if (preview.url) {
+                // Display preview image as fallback
+                previewElement.innerHTML = '';
+                const img = document.createElement('img');
+                img.src = preview.url;
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+                previewElement.appendChild(img);
+                console.log('Displayed preview image as fallback');
+                return; // Exit early, we have a working preview
             }
+        } catch (previewError) {
+            console.warn('Preview failed, trying Cornerstone:', previewError);
+            // Continue to Cornerstone approach
+        }
 
-            // Set up the preview container
-            previewElement.style.width = "256px";
-            previewElement.style.height = "256px";
-            previewElement.innerHTML = '';
-
+        // Try Cornerstone approach
+        try {
             // Construct the image ID using wadouri scheme
             const imageId = `wadouri:${window.location.origin}${API_BASE_URL}/studies/${study.ID}/instances/${study.SampleInstanceID}/file`;
-            console.log("Loading DICOM from:", imageId);
+            console.log("Attempting to load imageId:", imageId);
 
-            // Create viewport configuration
+            // Clear the element for cornerstone
+            previewElement.innerHTML = '';
+
             const viewportInput = {
                 viewportId: viewportId,
                 element: previewElement,
-                type: csEnums.ViewportType.STACK,
+                type: Enums.ViewportType.STACK,
             };
 
-            // Enable viewport in rendering engine
+            // Enable the element for cornerstone
             renderingEngine.enableElement(viewportInput);
 
-            // Connect viewport to tool group
-            const toolGroupInstance = ToolGroupManager.getToolGroup(toolGroupId);
-            if (toolGroupInstance) {
-                toolGroupInstance.addViewport(viewportId, renderingEngineId);
+            // Add the viewport to the tool group
+            const toolGroup = ToolGroupManager.getToolGroup(toolGroupId);
+            if (!toolGroup) {
+                throw new Error('Tool group not initialized');
             }
-
-            // Get viewport and load image
-            const viewport = renderingEngine.getViewport(viewportId);
             
-            // Use setStack for STACK viewports with an array of image IDs (just one in this case)
-            viewport.setStack([imageId], 0).then(() => {
-                viewport.render();
-                console.log(`DICOM loaded for ${viewportId}`);
-            }).catch(error => {
-                console.error(`Error loading DICOM for viewport ${viewportId}:`, error);
-                previewElement.textContent = `Error loading image: ${error.message}`;
-            });
+            toolGroup.addViewport(viewportId, renderingEngineId);
 
+            // Get the viewport object
+            const viewport = renderingEngine.getViewport(viewportId);
+
+            // Load the DICOM image via its ID with a timeout
+            const loadPromise = viewport.setStack([imageId], 0);
+            
+            // Add a timeout to avoid UI freezing if loading takes too long
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Loading timeout')), 5000);
+            });
+            
+            await Promise.race([loadPromise, timeoutPromise]);
+
+            // Render the loaded image
+            viewport.render();
+
+            console.log(`Cornerstone DICOM loaded for ${viewportId}`);
         } catch (error) {
-            console.error(`Error setting up DICOM preview for study ${study.ID}:`, error);
-            previewElement.textContent = `Error: ${error.message}`;
-            try { renderingEngine.disableElement(viewportId); } catch(e) { /* ignore */ }
+            console.error(`Error loading/displaying DICOM for study ${study.ID}:`, error);
+            
+            // Display error message and try alternate approach
+            try { 
+                renderingEngine.disableElement(viewportId); 
+            } catch(e) { /* ignore */ }
+            
+            // Create a simple visual representation
+            previewElement.innerHTML = '';
+            previewElement.textContent = 'DICOM Viewer Error: Using placeholder';
+            
+            // Add a placeholder image or canvas
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw a placeholder image
+            if (ctx) {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, 256, 256);
+                ctx.font = '14px Arial';
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.fillText('Error: ' + error.message, 128, 128);
+                ctx.fillText('Study: ' + study.ID, 128, 150);
+                ctx.fillText('Instance: ' + study.SampleInstanceID, 128, 170);
+                previewElement.innerHTML = '';
+                previewElement.appendChild(canvas);
+            }
         }
-
+        // --- End DICOM Loading ---
     } else if (study.LocationStatus.tier === 'cold') {
-        // Cold tier - no preview, offer to move to hot
         actionButton.textContent = 'Move to Hot';
-        actionButton.className = 'action-button cold';
-        actionButton.disabled = false;
-        actionButton.onclick = () => moveStudy(study.ID, 'hot', 'dev-k3d-node').then(() => {
-            // After move, refresh the study status
-            fetchLocation(study.ID).then(status => {
-                study.LocationStatus = status;
-                updateStudyDisplay(study, studyElement);
-            });
-        });
-        previewElement.textContent = 'Status: Cold (Preview not available)';
-        
+        actionButton.onclick = () => moveStudy(study.ID, 'hot', 'dev-k3d-node'); // Use Orthanc ID, provide edge ID
+        previewElement.textContent = 'Status: Cold (Preview N/A)';
+        previewElement.className = 'preview-area cold';
     } else if (study.LocationStatus.tier === 'archive') {
-        // Archive tier - no preview, offer to retrieve
-        actionButton.textContent = 'Retrieve from Archive';
-        actionButton.className = 'action-button archive';
-        actionButton.disabled = false;
-        actionButton.onclick = () => moveStudy(study.ID, 'cold').then(() => {
-            // After move, refresh the study status
-            fetchLocation(study.ID).then(status => {
-                study.LocationStatus = status;
-                updateStudyDisplay(study, studyElement);
-            });
-        });
-        previewElement.textContent = 'Status: Archive (Preview not available)';
-        
+        actionButton.textContent = 'Retrieve'; // Or Restore
+        actionButton.onclick = () => moveStudy(study.ID, 'cold', ''); // Move to cold first? Or directly to hot? Define workflow.
+        previewElement.textContent = 'Status: Archive (Preview N/A)';
+        previewElement.className = 'preview-area archive';
     } else {
-        // Unknown or error state
         actionButton.textContent = 'Unknown State';
-        actionButton.className = 'action-button';
         actionButton.disabled = true;
-        previewElement.textContent = `Status: ${study.LocationStatus.tier || 'Unknown'}`;
+        previewElement.textContent = 'Status: Unknown';
+        previewElement.className = 'preview-area unknown';
     }
 }
 
-// Function to fetch studies and their first instance ID
+// Function to fetch studies and instances
 async function fetchStudies() {
     console.log('Fetching studies from backend...');
     try {
@@ -284,7 +366,6 @@ async function fetchStudies() {
         // For each study, fetch a sample instance ID
         const enrichedStudiesPromises = studiesData.map(async (study) => {
             if (!study.ID) { 
-                console.warn('Study missing ID:', study);
                 return study; 
             }
             
@@ -296,15 +377,12 @@ async function fetchStudies() {
                         study.SampleInstanceID = instancesData[0].ID;
                     } else { 
                         study.SampleInstanceID = null;
-                        console.log(`No valid instances found for study ${study.ID}`);
                     }
                 } else { 
                     study.SampleInstanceID = null;
-                    console.warn(`Failed to fetch instances for study ${study.ID}: ${instancesResponse.status}`);
                 }
             } catch (instanceError) { 
                 study.SampleInstanceID = null;
-                console.error(`Error fetching instances for study ${study.ID}:`, instanceError);
             }
             
             return study;
@@ -356,28 +434,69 @@ function renderStudyItem(study) {
     item.className = 'study-item';
     item.id = `study-${study.ID}`;
 
-    // Patient info
+    // --- Patient Information ---
+    const patientName = study.PatientMainTags?.PatientName || 'Unknown';
+    const patientID = study.PatientMainTags?.PatientID || 'Unknown';
+    
     const title = document.createElement('h3');
-    title.textContent = `Patient: ${study.PatientMainTags?.PatientName || 'N/A'} (${study.PatientMainTags?.PatientID || 'N/A'})`;
+    title.textContent = `Patient: ${patientName} (${patientID})`;
     item.appendChild(title);
 
-    // Study info
+    // --- Study Information ---
+    const studyDescription = study.MainTags?.StudyDescription || 'Unknown';
+    const studyDate = study.MainTags?.StudyDate || '';
+    const studyTime = study.MainTags?.StudyTime || '';
+    
+    // Format date and time if available
+    let dateTimeStr = 'Unknown Date';
+    if (studyDate) {
+        // Convert YYYYMMDD to YYYY-MM-DD format
+        if (studyDate.length === 8) {
+            const year = studyDate.substring(0, 4);
+            const month = studyDate.substring(4, 6);
+            const day = studyDate.substring(6, 8);
+            dateTimeStr = `${year}-${month}-${day}`;
+            
+            // Add time if available (HHMMSS to HH:MM:SS)
+            if (studyTime && studyTime.length >= 6) {
+                const hour = studyTime.substring(0, 2);
+                const minute = studyTime.substring(2, 4);
+                const second = studyTime.substring(4, 6);
+                dateTimeStr += ` ${hour}:${minute}:${second}`;
+            }
+        } else {
+            dateTimeStr = studyDate;
+        }
+    }
+
     const studyInfo = document.createElement('p');
-    studyInfo.textContent = `Study: ${study.MainTags?.StudyDescription || 'N/A'} (${study.MainTags?.StudyDate || 'N/A'})`;
+    studyInfo.textContent = `Study: ${studyDescription} (${dateTimeStr})`;
+    studyInfo.style.fontSize = '0.9em';
     item.appendChild(studyInfo);
+
+    // Add accession number if available
+    if (study.MainTags?.AccessionNumber) {
+        const accessionInfo = document.createElement('p');
+        accessionInfo.textContent = `Accession: ${study.MainTags.AccessionNumber}`;
+        accessionInfo.style.fontSize = '0.85em';
+        accessionInfo.style.color = '#666';
+        item.appendChild(accessionInfo);
+    }
 
     // Status text
     const statusPara = document.createElement('p');
     statusPara.innerHTML = 'Status: <span class="status-text">loading...</span>';
     item.appendChild(statusPara);
 
-    // Cornerstone viewport container
+    // Preview container
     const previewDiv = document.createElement('div');
     previewDiv.className = 'preview-area';
-    previewDiv.id = `viewport-${study.ID}`;
     previewDiv.style.width = "256px";
     previewDiv.style.height = "256px";
     previewDiv.style.backgroundColor = "black";
+    previewDiv.style.display = "flex";
+    previewDiv.style.alignItems = "center";
+    previewDiv.style.justifyContent = "center";
     previewDiv.textContent = 'Loading...';
     item.appendChild(previewDiv);
 
@@ -389,6 +508,18 @@ function renderStudyItem(study) {
     actionButton.textContent = 'Loading...';
     actionButton.disabled = true;
     controlsDiv.appendChild(actionButton);
+    
+    // Add download button if we have an instance ID
+    if (study.SampleInstanceID) {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = `${API_BASE_URL}/studies/${study.ID}/instances/${study.SampleInstanceID}/file`;
+        downloadLink.download = `${study.ID}-${study.SampleInstanceID}.dcm`;
+        downloadLink.className = 'download-button';
+        downloadLink.style.marginLeft = '10px';
+        downloadLink.textContent = 'Download DICOM';
+        controlsDiv.appendChild(downloadLink);
+    }
+    
     item.appendChild(controlsDiv);
 
     return item;

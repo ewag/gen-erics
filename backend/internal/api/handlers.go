@@ -93,41 +93,78 @@ func (h *APIHandler) GetInstancePreviewHandler(c *gin.Context) {
     ctx := c.Request.Context()
     studyUID := c.Param("studyUID")
     instanceUID := c.Param("instanceUID")
-     if studyUID == "" || instanceUID == "" { /* ... handle error ... */ return }
+    
+    if studyUID == "" || instanceUID == "" { 
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing study or instance UID"})
+        return 
+    }
 
     // Check status from DB
     status, found, err := h.db.GetStatus(ctx, studyUID)
-     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
-     if err != nil {
-         c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check study status"})
-         return
-     }
-     if !found { // Treat not found in DB as not 'hot' (or return 404 maybe?)
-         logAttrs = append(logAttrs, "status", "unknown (not in DB)")
-         slog.InfoContext(ctx, "Instance preview requested but study status unknown", logAttrs...)
-         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
-         return
-     }
-
-    logAttrs = append(logAttrs, "status", status)
-    slog.DebugContext(ctx, "Checking preview status from DB", logAttrs...)
-
-    // --- IMPORTANT: Only serve preview if 'hot' ---
-    if status.Tier != "hot" { // Compare against actual tier string
-        slog.InfoContext(ctx, "Instance preview requested but study not 'hot'", logAttrs...)
-        c.JSON(http.StatusAccepted, gin.H{ // Or 412
-            "message": fmt.Sprintf("Preview not available (Study status: %s)", status.Tier),
-            "status":  status,
+    logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+    
+    if err != nil {
+        slog.ErrorContext(ctx, "Failed to check study status", append(logAttrs, "error", err)...)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check study status"})
+        return
+    }
+    
+    if !found {
+        // If status is not found, try to set a default status
+        defaultStatus := models.LocationStatus{
+            LocationType: "edge",
+            EdgeID:       nil,
+            Tier:         "hot",
+        }
+        
+        // Try to insert the default status
+        setErr := h.db.SetStatus(ctx, studyUID, defaultStatus)
+        if setErr != nil {
+            logAttrs = append(logAttrs, "setError", setErr)
+            slog.WarnContext(ctx, "Failed to set default status for study", logAttrs...)
+        } else {
+            status = &defaultStatus
+            found = true
+            slog.InfoContext(ctx, "Set default 'hot' status for study before preview", logAttrs...)
+        }
+    }
+    
+    // Double-check if we now have a valid status
+    if !found {
+        logAttrs = append(logAttrs, "status", "unknown (not in DB)")
+        slog.InfoContext(ctx, "Instance preview requested but study status unknown", logAttrs...)
+        c.JSON(http.StatusPreconditionFailed, gin.H{
+            "error": "Study status unknown and could not be set",
+            "details": "The study may need to be moved to hot tier first",
         })
         return
     }
-    // ------------------------------------------
 
-    // If hot, proceed...
+    // --- Check if study is 'hot' ---
+    if status.Tier != "hot" {
+        logAttrs = append(logAttrs, "tier", status.Tier)
+        slog.InfoContext(ctx, "Instance preview requested but study not 'hot'", logAttrs...)
+        c.JSON(http.StatusPreconditionFailed, gin.H{
+            "error": fmt.Sprintf("Preview not available (Study status: %s)", status.Tier),
+            "status": status,
+            "details": "Move study to hot tier to enable preview",
+        })
+        return
+    }
+
+    // If hot, proceed with fetching the preview...
     slog.InfoContext(ctx, "Fetching instance preview from Orthanc", logAttrs...)
     imageData, contentType, err := h.orthancClient.GetInstancePreview(instanceUID)
-     // ... (rest of existing preview handler error handling and response) ...
-    if err != nil { /* ... handle Orthanc errors ... */ return }
+    
+    if err != nil {
+        slog.ErrorContext(ctx, "Failed to get preview from Orthanc", append(logAttrs, "error", err)...)
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "error": "Failed to retrieve preview from PACS",
+            "details": err.Error(),
+        })
+        return
+    }
+    
     c.Header("Content-Type", contentType)
     c.Data(http.StatusOK, contentType, imageData)
 }
@@ -141,12 +178,12 @@ func (h *APIHandler) GetInstanceSimplifiedTagsHandler(c *gin.Context) {
 
     // Check status from DB
     status, found, err := h.db.GetStatus(ctx, studyUID)
-     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+    logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
      if err != nil { /* ... handle internal error ... */ return }
      if !found { /* ... handle not found / return default ... */
-         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
-         return
-     }
+        c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
+        return
+    }
 
     logAttrs = append(logAttrs, "status", status)
     slog.DebugContext(ctx, "Checking tags status from DB", logAttrs...)
@@ -171,12 +208,12 @@ func (h *APIHandler) GetInstanceFileHandler(c *gin.Context) {
 
     // Check status from DB
     status, found, err := h.db.GetStatus(ctx, studyUID)
-     logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
+    logAttrs := []any{"studyUID", studyUID, "instanceUID", instanceUID}
      if err != nil { /* ... handle internal error ... */ return }
      if !found { /* ... handle not found / return default ... */
-         c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
-         return
-     }
+        c.JSON(http.StatusPreconditionFailed, gin.H{"error": "Study status unknown"})
+        return
+    }
 
     logAttrs = append(logAttrs, "status", status)
     slog.DebugContext(ctx, "Checking file request status from DB", logAttrs...)
@@ -229,42 +266,49 @@ func (h *APIHandler) ListStudyInstancesHandler(c *gin.Context) {
 func (h *APIHandler) GetStudyLocationHandler(c *gin.Context) {
     ctx := c.Request.Context()
     studyUID := c.Param("studyUID")
-    
-    if studyUID == "" {
-        slog.ErrorContext(ctx, "Empty studyUID parameter")
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing studyUID parameter"})
-        return
+    if studyUID == "" { 
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing study UID"})
+        return 
     }
-    
-    // Log the exact studyUID being queried to help debug
-    slog.InfoContext(ctx, "Getting study location", "studyUID", studyUID)
-    
+
     // Get status from DB via storage layer
     status, found, err := h.db.GetStatus(ctx, studyUID)
-    
+    logAttrs := []any{"studyUID", studyUID}
+
     if err != nil {
-        // Log the full error details
-        slog.ErrorContext(ctx, "Database error retrieving study status", 
-            "studyUID", studyUID, 
-            "error", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to retrieve study status: %v", err)})
+        slog.ErrorContext(ctx, "Failed to retrieve study status", logAttrs...)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve study status"})
         return
     }
-    
+
+    // If not found in DB, create a default status and save it
     if !found {
-        slog.InfoContext(ctx, "No status found for study in DB, returning default 'hot'", "studyUID", studyUID)
-        // Define default status if not found in DB
-        defaultStatus := &models.LocationStatus{
-            LocationType: "edge",
-            EdgeID:       nil,
-            Tier:         "hot",
+        slog.InfoContext(ctx, "No status found for study in DB, setting default 'hot'", logAttrs...)
+        
+        // Define default status for new studies
+        defaultStatus := models.LocationStatus{
+             LocationType: "edge",
+             EdgeID:       nil,
+             Tier:         "hot",
         }
+        
+        // Insert the default status into the database
+        err := h.db.SetStatus(ctx, studyUID, defaultStatus)
+        if err != nil {
+            slog.ErrorContext(ctx, "Failed to set default status for new study", append(logAttrs, "error", err)...)
+            // Even if saving fails, still return the default status
+            c.JSON(http.StatusOK, defaultStatus)
+            return
+        }
+        
+        slog.InfoContext(ctx, "Set default 'hot' status for new study", logAttrs...)
         c.JSON(http.StatusOK, defaultStatus)
         return
     }
-    
+
     // Status found in DB
-    slog.InfoContext(ctx, "Returning study status from DB", "studyUID", studyUID, "status", status)
+    logAttrs = append(logAttrs, "status", status, "foundInDB", found)
+    slog.InfoContext(ctx, "Returning study status from DB", logAttrs...)
     c.JSON(http.StatusOK, status)
 }
 // Update this method in your api/handlers.go file

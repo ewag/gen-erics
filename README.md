@@ -1,3 +1,4 @@
+![gen-erics](static/logo.png)
 # gen-erics
 
 ## Overview

@@ -1,35 +1,47 @@
-/* Updated frontend/style.css */
+/* Enhanced styles for the DICOM viewer */
 body {
-    font-family: sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     margin: 20px;
-    background-color: #f0f0f0;
+    background-color: #f5f7fa;
+    color: #333;
 }
 
 h1 {
     text-align: center;
-    color: #333;
+    color: #2c3e50;
+    margin-bottom: 30px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 15px;
 }
 
 #studies-list {
     margin-top: 20px;
-    display: grid; /* Use grid for responsive layout */
-    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); /* Responsive columns */
-    gap: 15px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
 }
 
 .study-item {
-    border: 1px solid #ccc;
+    border: 1px solid #ddd;
     padding: 15px;
-    border-radius: 5px;
+    border-radius: 8px;
     background-color: #fff;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.study-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
 
 .study-item h3 {
     margin-top: 0;
     font-size: 1.1em;
-    word-break: break-all; /* Handle long UIDs */
-    color: #0056b3;
+    word-break: break-all;
+    color: #3498db;
+    border-bottom: 1px solid #f0f0f0;
+    padding-bottom: 8px;
 }
 
 .study-item p {
@@ -37,81 +49,99 @@ h1 {
     font-size: 0.95em;
 }
 
-.study-item .status-text {
-    font-weight: bold;
-}
-
 .study-item .status {
+    display: inline-block;
     font-weight: bold;
-    padding: 2px 6px;
+    padding: 3px 8px;
     border-radius: 3px;
     color: white;
+    font-size: 0.85em;
 }
-.status.hot { background-color: #d9534f; }
-.status.warm { background-color: #f0ad4e; }
-.status.cold { background-color: #5bc0de; }
-.status.archive { background-color: #777; }
-.status.unknown { background-color: #aaa; }
 
-/* Fix: Update to match the class used in JS (.preview-area) */
+.study-item .status.hot { background-color: #e74c3c; }
+.study-item .status.warm { background-color: #f39c12; }
+.study-item .status.cold { background-color: #3498db; }
+.study-item .status.archive { background-color: #7f8c8d; }
+.study-item .status.unknown { background-color: #95a5a6; }
+
 .study-item .preview-area {
-    width: 256px;  
+    width: 256px;
     height: 256px;
-    margin: 10px 0;
-    background-color: #000; /* Black background typical for viewers */
-    color: white; /* For loading/error text */
+    margin: 15px auto;
+    background-color: #000;
+    color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative; /* Needed for tool overlays */
-    overflow: hidden; /* Hide parts of image when zoomed/panned */
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
     text-align: center;
     font-size: 0.9em;
 }
 
+.study-item .preview-area.cold {
+    background-color: #2980b9;
+}
+
+.study-item .preview-area.archive {
+    background-color: #34495e;
+}
+
+.study-item .preview-area.unknown {
+    background-color: #7f8c8d;
+}
+
 .study-item .controls {
-    margin-top: 10px;
+    margin-top: 15px;
     border-top: 1px solid #eee;
-    padding-top: 10px;
+    padding-top: 15px;
+    display: flex;
+    justify-content: center;
 }
 
 .study-item button {
-    margin-right: 5px;
-    margin-top: 5px;
-    padding: 6px 12px;
+    padding: 8px 16px;
     cursor: pointer;
-    border: 1px solid #ccc;
+    border: none;
     border-radius: 4px;
-    background-color: #e7e7e7;
+    background-color: #3498db;
+    color: white;
+    font-weight: 500;
+    transition: background-color 0.2s;
 }
 
 .study-item button:hover {
-    background-color: #ddd;
+    background-color: #2980b9;
 }
 
 .study-item button:disabled {
     cursor: not-allowed;
     opacity: 0.6;
+    background-color: #95a5a6;
 }
 
-/* Cornerstone Specific Styles */
-.viewport-element {
-    width: 100%;
-    height: 100%;
+/* Loading state */
+.loading-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: #7f8c8d;
 }
 
-/* Add status color indicators */
-.action-button.hot {
-    background-color: #d9534f;
-    color: white;
+.loading-indicator::before {
+    content: "";
+    width: 20px;
+    height: 20px;
+    margin-right: 10px;
+    border: 2px solid #ddd;
+    border-top-color: #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
 }
 
-.action-button.cold {
-    background-color: #5bc0de;
-    color: white;
-}
-
-.action-button.archive {
-    background-color: #777;
-    color: white;
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
